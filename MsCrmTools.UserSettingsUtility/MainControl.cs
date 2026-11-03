@@ -1,4 +1,5 @@
 ﻿using CrmEarlyBound;
+using McTools.Xrm.Connection;
 using Microsoft.Xrm.Sdk;
 using MsCrmTools.UserSettingsUtility.AppCode;
 using System;
@@ -398,13 +399,33 @@ namespace MsCrmTools.UserSettingsUtility
             }
         }
 
+        public override void UpdateConnection(IOrganizationService newService, ConnectionDetail detail, string actionName, object parameter)
+        {
+            // Forget everything read from the previous organization. This has to happen before
+            // the base call, which runs the action the connection was requested for (Load)
+            sitemapxml = "";
+            areas = null;
+            subAreas = null;
+            smm = null;
+            applist.SelectedIndexChanged -= applist_SelectedIndexChanged;
+            applist.Items.Clear();
+            userSelector1.Clear();
+            panel1.Enabled = false;
+
+            base.UpdateConnection(newService, detail, actionName, parameter);
+        }
+
         internal void SetHomes(List<AppSiteMapItems> scHomes)
         {
             applist.SelectedIndexChanged -= applist_SelectedIndexChanged;
             applist.Items.Clear();
-            applist.Items.AddRange(scHomes.OrderBy(s => s.ToString()).ToArray());
+            var homes = scHomes.OrderBy(s => s.ToString()).ToArray();
+            applist.Items.AddRange(homes);
+            // Select the app whose sitemap the area lists are filled from, without reloading
+            // them: sorting moves "Default" away from index 0, and reloading here added every
+            // area a second time once the caller filled the lists
+            applist.SelectedItem = homes.FirstOrDefault(h => h.SiteMapXml == sitemapxml) ?? homes.FirstOrDefault();
             applist.SelectedIndexChanged += applist_SelectedIndexChanged;
-            applist.SelectedIndex = 0;
         }
 
         private void applist_SelectedIndexChanged(object sender, EventArgs e)
