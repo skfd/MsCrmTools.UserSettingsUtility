@@ -15,11 +15,16 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
         private int currentColumnOrder;
         private List<ListViewItem> items = new List<ListViewItem>();
         private Thread searchThread;
+        private readonly System.Windows.Forms.Timer selectionTimer = new System.Windows.Forms.Timer { Interval = 250 };
         private IOrganizationService service;
+        private int settingsRequest;
 
         public UserSelector()
         {
             InitializeComponent();
+
+            selectionTimer.Tick += selectionTimer_Tick;
+            Disposed += (sender, e) => selectionTimer.Dispose();
         }
 
         public List<Entity> SelectedItems
@@ -152,24 +157,57 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
 
         private void lvUsers_ItemSelectionChanged(object sender, ListViewItemSelectionChangedEventArgs e)
         {
-            var user = e.Item.Tag as Entity;
-            if (user == null) return;
+            // Raised for every row a click selects or deselects, so a shift-click across
+            // two dozen users used to fetch two dozen settings records one after another.
+            // Wait for the selection to settle, then load only the row it ended on
+            selectionTimer.Stop();
+            selectionTimer.Start();
+        }
 
-            var records = service.RetrieveMultiple(new QueryByAttribute("usersettings")
-            {
-                Attributes = { "systemuserid" },
-                Values = { user.Id },
-                ColumnSet = new ColumnSet(true)
-            });
+        private void selectionTimer_Tick(object sender, EventArgs e)
+        {
+            selectionTimer.Stop();
 
-            var settings = records.Entities.FirstOrDefault();
-            if (settings == null)
+            var item = lvUsers.FocusedItem != null && lvUsers.FocusedItem.Selected
+                ? lvUsers.FocusedItem
+                : lvUsers.SelectedItems.Cast<ListViewItem>().LastOrDefault();
+            var user = item?.Tag as Entity;
+            var currentService = service;
+            if (user == null || currentService == null) return;
+
+            var request = ++settingsRequest;
+            var bw = new BackgroundWorker();
+            bw.DoWork += (s, args) =>
             {
-                MessageBox.Show(this,
-                    $@"Unable to find settings for the user {user.GetAttributeValue<string>("fullname")}", @"Warning", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-                return;
-            }
-            ((MainControl)this.Parent.Parent.Parent).LoadCurrentUserSetting(settings);
+                args.Result = currentService.RetrieveMultiple(new QueryByAttribute("usersettings")
+                {
+                    Attributes = { "systemuserid" },
+                    Values = { user.Id },
+                    ColumnSet = new ColumnSet(true)
+                });
+            };
+            bw.RunWorkerCompleted += (s, args) =>
+            {
+                // The user has moved on to another row since this one was asked for
+                if (request != settingsRequest || IsDisposed) return;
+
+                if (args.Error != null)
+                {
+                    MessageBox.Show(this,
+                        $@"Unable to load settings for the user {user.GetAttributeValue<string>("fullname")}: {args.Error.Message}", @"Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                var settings = ((EntityCollection)args.Result).Entities.FirstOrDefault();
+                if (settings == null)
+                {
+                    MessageBox.Show(this,
+                        $@"Unable to find settings for the user {user.GetAttributeValue<string>("fullname")}", @"Warning", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+                    return;
+                }
+                ((MainControl)this.Parent.Parent.Parent).LoadCurrentUserSetting(settings);
+            };
+            bw.RunWorkerAsync();
         }
 
         private void txtFilter_TextChanged(object sender, EventArgs e)
