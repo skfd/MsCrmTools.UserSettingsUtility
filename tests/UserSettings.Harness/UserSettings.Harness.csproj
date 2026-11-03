@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <!-- A console app that opens a window: findings go to stdout, the window is the real tool. -->
+    <OutputType>Exe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>UserSettings.Harness</RootNamespace>
+    <!-- Which copy of the tool to drive. fake.ps1 -Against points this at another checkout, so the
+         same scenarios can be run against master to show they fail there. -->
+    <PluginProject Condition="'$(PluginProject)' == ''">..\..\MsCrmTools.UserSettingsUtility\MsCrmTools.UserSettingsUtility.csproj</PluginProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The version the tool itself builds against, so both load the same XrmToolBox and SDK. -->
+    <PackageReference Include="XrmToolBoxPackage" Version="1.2023.10.67" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Release: the tool's Debug post-build moves its dll into Plugins\, out from under the
+         reference. -->
+    <ProjectReference Include="$(PluginProject)" SetConfiguration="Configuration=Release" />
+  </ItemGroup>
+</Project>

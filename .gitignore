@@ -250,3 +250,9 @@ paket-files/
 # JetBrains Rider
 .idea/
 *.sln.iml
+
+# Test harness output: shots, logs, borrowed sign in, other branches built for comparison
+tests/.fake/
+tests/.e2e/
+tests/.against/
+[Oo]bj/
