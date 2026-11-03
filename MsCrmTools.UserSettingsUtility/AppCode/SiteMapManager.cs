@@ -72,15 +72,16 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
                         continue;
                     }
 
-                    var tmpSiteMap = service.Retrieve("sitemap",
-                        siteMapId.GetAttributeValue<Guid>("objectid"), new ColumnSet(true));
+                    // Every sitemap was already retrieved above
+                    var tmpSiteMap = ecdefault.Entities.FirstOrDefault(s => s.Id == siteMapId.GetAttributeValue<Guid>("objectid"));
 
-                    if (tmpSiteMap.GetAttributeValue<OptionSetValue>("componentstate")?.Value != 0)
+                    if (tmpSiteMap == null || tmpSiteMap.GetAttributeValue<OptionSetValue>("componentstate")?.Value != 0)
                     {
                         continue;
                     }
 
-                    tmpSiteMap["name"] =
+                    // AppSiteMapItems displays sitemapname
+                    tmpSiteMap["sitemapname"] =
                         siteMapId.GetAttributeValue<EntityReference>("appmoduleidunique").Name ?? "Default";
                     ec.Entities.Add(tmpSiteMap);
                 }
@@ -96,7 +97,7 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
             {
                 LoadSiteMap(sitemapxml);
             }
-            if (string.IsNullOrEmpty(sitemapxml))
+            if (!string.IsNullOrEmpty(sitemapxml))
             {
                 LoadSiteMap(sitemapxml);
             }

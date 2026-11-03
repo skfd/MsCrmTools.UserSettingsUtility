@@ -402,9 +402,13 @@ namespace MsCrmTools.UserSettingsUtility
         {
             applist.SelectedIndexChanged -= applist_SelectedIndexChanged;
             applist.Items.Clear();
-            applist.Items.AddRange(scHomes.OrderBy(s => s.ToString()).ToArray());
+            var homes = scHomes.OrderBy(s => s.ToString()).ToArray();
+            applist.Items.AddRange(homes);
+            // Select the app whose sitemap the area lists are filled from, without reloading
+            // them: sorting moves "Default" away from index 0, and reloading here added every
+            // area a second time once the caller filled the lists
+            applist.SelectedItem = homes.FirstOrDefault(h => h.SiteMapXml == sitemapxml) ?? homes.FirstOrDefault();
             applist.SelectedIndexChanged += applist_SelectedIndexChanged;
-            applist.SelectedIndex = 0;
         }
 
         private void applist_SelectedIndexChanged(object sender, EventArgs e)
