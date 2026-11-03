@@ -40,6 +40,18 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
             get { return service; }
         }
 
+        public void Clear()
+        {
+            // Clearing raises the selection and index events, whose handlers query the org
+            lvUsers.ItemSelectionChanged -= lvUsers_ItemSelectionChanged;
+            lvUsers.Items.Clear();
+            lvUsers.ItemSelectionChanged += lvUsers_ItemSelectionChanged;
+            cbbViews.SelectedIndexChanged -= cbbViews_SelectedIndexChanged;
+            cbbViews.Items.Clear();
+            items.Clear();
+            service = null;
+        }
+
         public void FilterDisplay(object term)
         {
             var filteredItems = items.Where(i => string.IsNullOrEmpty(term.ToString()) || i.Text.ToLower().IndexOf(term.ToString().ToLower()) >= 0

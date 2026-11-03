@@ -1,4 +1,5 @@
 ﻿using CrmEarlyBound;
+using McTools.Xrm.Connection;
 using Microsoft.Xrm.Sdk;
 using MsCrmTools.UserSettingsUtility.AppCode;
 using System;
@@ -396,6 +397,22 @@ namespace MsCrmTools.UserSettingsUtility
                 }
                 userSelector1.PopulateUsers(fetchXml);
             }
+        }
+
+        public override void UpdateConnection(IOrganizationService newService, ConnectionDetail detail, string actionName, object parameter)
+        {
+            // Forget everything read from the previous organization. This has to happen before
+            // the base call, which runs the action the connection was requested for (Load)
+            sitemapxml = "";
+            areas = null;
+            subAreas = null;
+            smm = null;
+            applist.SelectedIndexChanged -= applist_SelectedIndexChanged;
+            applist.Items.Clear();
+            userSelector1.Clear();
+            panel1.Enabled = false;
+
+            base.UpdateConnection(newService, detail, actionName, parameter);
         }
 
         internal void SetHomes(List<AppSiteMapItems> scHomes)
