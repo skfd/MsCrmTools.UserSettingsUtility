@@ -39,7 +39,11 @@ namespace UserSettings.Harness
                     {
                         org.Settings[UserId(0)]["paginglimit"] = 100;
                         org.Settings[UserId(0)]["workdaystarttime"] = "09:00";
-                    })
+                    }),
+                ChangedFieldsAreMarked(),
+                NothingChangedSendsNothing(),
+                ResetThenPickSendsTheValue(),
+                AreaFromAnotherAppIsSent()
             };
         }
 
@@ -205,11 +209,9 @@ namespace UserSettings.Harness
                     var written = updates.FirstOrDefault()?.Written;
                     r.Check(written?.GetAttributeValue<string>("workdaystoptime") == "18:15",
                         "the end time written was \"" + written?.GetAttributeValue<string>("workdaystoptime") + "\"");
-                    // Selecting a user fills the form with their settings, and Update applies the
-                    // form: that is how one user's settings are copied to others
-                    r.Check(written?.GetAttributeValue<string>("workdaystarttime") == "08:00",
-                        "the start time written was \"" + written?.GetAttributeValue<string>("workdaystarttime")
-                        + "\", not the 08:00 the form showed");
+                    // Update sends what was changed, not the form the clicked user filled
+                    r.Check(written?.Contains("workdaystarttime") == false,
+                        "the start time was written although nobody changed it");
                 });
         }
 
@@ -335,6 +337,127 @@ namespace UserSettings.Harness
 
                     r.Check(r.Thrown.Count == 0, "the tool threw " + r.Thrown.Count + " time(s)");
                     r.Check(updates.Count == 2, updates.Count + " updates were sent, not 2");
+                    foreach (var update in updates)
+                    {
+                        var keys = update.Written.Attributes.Keys.Where(k => k != "usersettingsid").OrderBy(k => k).ToArray();
+                        r.Check(keys.SequenceEqual(new[] { "timezonecode" }),
+                            "an update wrote more than the time zone: " + string.Join(", ", keys));
+                    }
+                });
+        }
+
+        private static void CheckMarks(Run r, int count, params string[] labels)
+        {
+            var button = r.Find<ToolStripButton>("tsbUpdateUserSettings");
+            r.Check(button.Text.EndsWith("(" + count + " changed)") == (count > 0), "the button reads \"" + button.Text + "\"");
+            foreach (var label in new[] { "label3", "label4", "label6" })
+            {
+                r.Check(r.Find<Control>(label).Font.Bold == labels.Contains(label), label + " bold is " + r.Find<Control>(label).Font.Bold);
+            }
+        }
+
+        private static Scenario ChangedFieldsAreMarked()
+        {
+            return new Scenario
+                {
+                    Name = "changed-fields-are-marked",
+                    Why = "fix/update-only-changes: the form shows what Update will write",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Select(0)
+                .Do("nothing is marked after clicking a user", r => CheckMarks(r, 0))
+                .Do("change the paging limit", r =>
+                {
+                    r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100";
+                    CheckMarks(r, 1, "label3");
+                })
+                .Do("type a start time and set the time zone", r =>
+                {
+                    r.Find<ComboBox>("cbbWorkStartTime").Text = "08:45";
+                    var zones = r.Find<ComboBox>("cbbTimeZones");
+                    zones.SelectedIndex = zones.Items.Count - 1;
+                    CheckMarks(r, 3, "label3", "label4", "label6");
+                    var tip = r.Find<ToolStripButton>("tsbUpdateUserSettings").ToolTipText;
+                    r.Check(tip.Contains("Records per page") && tip.Contains("Time zone") && tip.Contains("Start time"), "the tooltip reads " + tip);
+                })
+                .Do("put the paging limit back", r =>
+                {
+                    r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "50";
+                    CheckMarks(r, 2, "label4", "label6");
+                })
+                .Do("press Reset", r =>
+                {
+                    r.Find<ToolStripButton>("tsbReset").PerformClick();
+                    CheckMarks(r, 0);
+                });
+        }
+
+        private static Scenario NothingChangedSendsNothing()
+        {
+            return new Scenario
+                {
+                    Name = "nothing-changed-sends-nothing",
+                    Why = "fix/update-only-changes: Update after only clicking a user writes nothing and says so",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Select(0)
+                .Update(1)
+                .WaitFor("the tool to say so", r => r.Dialogs.Any(d => d.Contains("No setting has been changed")))
+                .Do("ask the org what was written", r =>
+                    r.Check(Updates(r).Count == 0, Updates(r).Count + " updates were sent"));
+        }
+
+        private static Scenario ResetThenPickSendsTheValue()
+        {
+            return new Scenario
+                {
+                    Name = "reset-then-pick-sends-the-value",
+                    Why = "fix/update-only-changes: a value equal to the clicked user's can still be sent, after Reset",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Select(0)
+                .Do("press Reset and pick the same paging limit", r =>
+                {
+                    r.Find<ToolStripButton>("tsbReset").PerformClick();
+                    r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "50";
+                })
+                .Update(1)
+                .Finished()
+                .Do("ask the org what was written", r =>
+                {
+                    var written = Updates(r).FirstOrDefault()?.Written;
+                    r.Check(written?.GetAttributeValue<int>("paginglimit") == 50, "the paging limit was not written");
+                });
+        }
+
+        private static Scenario AreaFromAnotherAppIsSent()
+        {
+            return new Scenario
+                {
+                    Name = "area-from-another-app-is-sent",
+                    Why = "fix/update-only-changes: the same place in another app's list is a different area",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Select(0)
+                .Do("switch app and pick its first area", r =>
+                {
+                    var apps = r.Find<ToolStripComboBox>("applist");
+                    apps.SelectedIndex = apps.SelectedIndex == 0 ? 1 : 0;
+                    r.Find<ComboBox>("cbbSiteMapArea").SelectedIndex = 1;
+                })
+                .Update(1)
+                .Finished()
+                .Do("ask the org what was written", r =>
+                {
+                    var written = Updates(r).FirstOrDefault()?.Written;
+                    var picked = r.Find<ComboBox>("cbbSiteMapArea").SelectedItem?.ToString();
+                    r.Check(written?.GetAttributeValue<string>("homepagearea") == picked, "the area " + picked + " was not written");
+                    var keys = written?.Attributes.Keys.Where(k => k != "usersettingsid").ToArray() ?? new string[0];
+                    r.Check(keys.Length == 1, "wrote: " + string.Join(", ", keys));
                 });
         }
 
