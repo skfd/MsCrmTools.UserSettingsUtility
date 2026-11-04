@@ -39,6 +39,9 @@ namespace UserSettings.Harness
 
         public readonly List<string> Failures = new List<string>();
 
+        /// <summary>What the tool threw in a scenario that carries on afterwards, as a person would.</summary>
+        public readonly List<string> Thrown = new List<string>();
+
         /// <summary>Captions and text of every dialog the tool put up, in order.</summary>
         public readonly List<string> Dialogs = new List<string>();
 
@@ -103,6 +106,12 @@ namespace UserSettings.Harness
         public Func<IOrganizationService> Org;
         public readonly List<Step> Steps = new List<Step>();
 
+        /// <summary>
+        /// Dismiss what the tool throws and play on, the way XrmToolBox's error box lets a person
+        /// do. The scenario decides at the end what the throws mean.
+        /// </summary>
+        public bool Survive;
+
         public Scenario Do(string label, Action<Run> what)
         {
             Steps.Add(new Step { Label = label, Do = what });
@@ -136,7 +145,10 @@ namespace UserSettings.Harness
             if (run.LogPath != null && File.Exists(run.LogPath)) File.Delete(run.LogPath);
 
             ThreadExceptionEventHandler onThreadException = (s, e) =>
-                run.Failures.Add(run.Clock.ElapsedMilliseconds + "ms  the tool threw: " + Ui.Head(e.Exception));
+            {
+                if (Survive) run.Thrown.Add(Ui.Where(e.Exception));
+                else run.Failures.Add(run.Clock.ElapsedMilliseconds + "ms  the tool threw: " + Ui.Head(e.Exception));
+            };
             Application.ThreadException += onThreadException;
 
             var sweeper = new Dialogs(run);
@@ -251,6 +263,15 @@ namespace UserSettings.Harness
             var line = ex.GetBaseException().ToString();
             var stop = line.IndexOf('\n');
             return (stop < 0 ? line : line.Substring(0, stop)).Trim();
+        }
+
+        /// <summary>The exception's type and the method of the tool it came out of.</summary>
+        public static string Where(Exception ex)
+        {
+            var root = ex.GetBaseException();
+            var frame = (root.StackTrace ?? "").Split('\n').Select(l => l.Trim())
+                .FirstOrDefault(l => l.Contains("MsCrmTools.UserSettingsUtility"));
+            return root.GetType().Name + " " + frame;
         }
 
         public static string Slug(string label)

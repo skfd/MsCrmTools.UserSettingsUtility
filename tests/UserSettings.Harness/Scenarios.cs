@@ -24,8 +24,43 @@ namespace UserSettings.Harness
                 MistypedWorkTimeIsRefused(),
                 UserWithoutHomePage(),
                 ShiftSelectLoadsOnce(),
-                UpdateImpersonatesEachUser()
+                UpdateImpersonatesEachUser(),
+                TimeZoneForTwoUsers("time-zone-plain", "nothing missing", true),
+                TimeZoneForTwoUsers("time-zone-no-tab", "both users have an area but no tab", true,
+                    org => { Forget(org, 0, "homepagesubarea"); Forget(org, 1, "homepagesubarea"); }),
+                TimeZoneForTwoUsers("time-zone-no-home", "both users have neither area nor tab", true,
+                    org => { Forget(org, 0, "homepagearea", "homepagesubarea"); Forget(org, 1, "homepagearea", "homepagesubarea"); }),
+                TimeZoneForTwoUsers("time-zone-first-no-tab", "only the first user clicked has no tab", true,
+                    org => Forget(org, 0, "homepagesubarea")),
+                TimeZoneForTwoUsers("time-zone-ticks-only", "no tab, but the users are ticked and never clicked", false,
+                    org => { Forget(org, 0, "homepagesubarea"); Forget(org, 1, "homepagesubarea"); }),
+                TimeZoneForTwoUsers("time-zone-users-differ", "user 1 has 100 a page from 09:00, user 2 has 50 from 08:00", true,
+                    org =>
+                    {
+                        org.Settings[UserId(0)]["paginglimit"] = 100;
+                        org.Settings[UserId(0)]["workdaystarttime"] = "09:00";
+                    })
             };
+        }
+
+        private static void Forget(FakeOrg org, int user, params string[] attributes)
+        {
+            foreach (var attribute in attributes) org.Settings[UserId(user)].Attributes.Remove(attribute);
+        }
+
+        /// <summary>Presses Update and keeps what it threw, which comes straight out of PerformClick.</summary>
+        internal static void PressUpdate(Run r, string when)
+        {
+            Console.WriteLine("    " + when + ": area index " + r.Find<ComboBox>("cbbSiteMapArea").SelectedIndex
+                              + ", tab index " + r.Find<ComboBox>("cbbSiteMapSubArea").SelectedIndex);
+            try
+            {
+                r.Find<ToolStripButton>("tsbUpdateUserSettings").PerformClick();
+            }
+            catch (Exception ex)
+            {
+                r.Thrown.Add(when + ": " + Ui.Where(ex));
+            }
         }
 
         // ---- shared steps ----
@@ -222,6 +257,84 @@ namespace UserSettings.Harness
                     var written = Updates(r).FirstOrDefault()?.Written;
                     r.Check(written?.GetAttributeValue<int>("paginglimit") == 100, "the paging limit was not written");
                     r.Check(written == null || !written.Contains("homepagearea"), "a home page was written although none was chosen");
+                });
+        }
+
+        /// <summary>
+        /// Select a couple of users, set the time zone, save - and if that throws, do what the
+        /// person who hit it did: flip the app list and save again.
+        /// </summary>
+        private static Scenario TimeZoneForTwoUsers(string name, string why, bool clickRows, Action<FakeOrg> data = null)
+        {
+            var thrownByFirstSave = 0;
+            return new Scenario
+                {
+                    Name = name,
+                    Why = "two users, a time zone, Update: " + why,
+                    Survive = true,
+                    Org = () =>
+                    {
+                        var org = FakeOrg.Sample("Org A", 3);
+                        data?.Invoke(org);
+                        return org;
+                    }
+                }
+                .Loaded(3)
+                .Do(clickRows ? "click two users" : "leave the rows alone", r =>
+                {
+                    if (!clickRows) return;
+                    foreach (var i in new[] { 0, 1 })
+                    {
+                        r.Users.Items[i].Selected = true;
+                        r.Users.FocusedItem = r.Users.Items[i];
+                    }
+                })
+                .Pause("the selection to settle", 1000)
+                .Do("set the time zone", r =>
+                {
+                    var zones = r.Find<ComboBox>("cbbTimeZones");
+                    zones.SelectedIndex = zones.Items.Count - 1;
+                })
+                .Do("tick them", r =>
+                {
+                    r.Users.Items[0].Checked = true;
+                    r.Users.Items[1].Checked = true;
+                    r.Fake.ForgetCalls();
+                })
+                .Do("press Update", r =>
+                {
+                    PressUpdate(r, "first save");
+                    thrownByFirstSave = r.Thrown.Count;
+                })
+                .WaitFor("the update to finish or throw",
+                    r => thrownByFirstSave > 0 || r.Dialogs.Any(d => d.Contains("Do you want to open log file?")), 30000)
+                .Do("flip the app list there and back if it threw", r =>
+                {
+                    if (thrownByFirstSave == 0) return;
+                    var apps = r.Find<ToolStripComboBox>("applist");
+                    var was = apps.SelectedIndex;
+                    apps.SelectedIndex = was == 0 ? 1 : 0;
+                    apps.SelectedIndex = was;
+                })
+                .Do("press Update again if it threw", r =>
+                {
+                    if (thrownByFirstSave > 0) PressUpdate(r, "after the app list");
+                })
+                .WaitFor("the second update to finish or throw",
+                    r => r.Thrown.Count > thrownByFirstSave || r.Dialogs.Any(d => d.Contains("Do you want to open log file?")), 30000)
+                .Do("ask the org what was written", r =>
+                {
+                    foreach (var thrown in r.Thrown) Console.WriteLine("    threw " + thrown);
+                    foreach (var dialog in r.Dialogs) Console.WriteLine("    dialog " + dialog);
+                    var updates = Updates(r);
+                    foreach (var update in updates)
+                    {
+                        Console.WriteLine("    wrote " + update.Written.Id + ": " + string.Join(", ", update.Written.Attributes
+                            .Where(a => a.Key != "usersettingsid").Select(a => a.Key + "=" + a.Value)));
+                    }
+
+                    r.Check(r.Thrown.Count == 0, "the tool threw " + r.Thrown.Count + " time(s)");
+                    r.Check(updates.Count == 2, updates.Count + " updates were sent, not 2");
                 });
         }
 
