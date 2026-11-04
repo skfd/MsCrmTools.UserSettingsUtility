@@ -3,6 +3,7 @@ using Microsoft.Xrm.Sdk;
 using MsCrmTools.UserSettingsUtility.AppCode;
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -16,17 +17,61 @@ namespace MsCrmTools.UserSettingsUtility
     public partial class MainControl : PluginControlBase, IGitHubPlugin, IHelpPlugin, IMessageBusHost
     {
         private const string ACTIVE_USERS_FETCH = @"<fetch version='1.0' output-format='xml-platform' mapping='logical' ><entity name='systemuser' ><attribute name='fullname' /><order attribute='fullname' descending='false' /><attribute name='businessunitid' /><attribute name='siteid' /><filter type='and' ><condition attribute='isdisabled' operator='eq' value='0' /><condition attribute='accessmode' operator='ne' value='3' /></filter><attribute name='systemuserid' /></entity></fetch>";
+        private const string NO_CHANGE = "No change";
+        private const string UPDATE_BUTTON_TEXT = "Update User(s) Settings";
+        private readonly Font changedFont;
+        private readonly Dictionary<ComboBox, string> loadedValues = new Dictionary<ComboBox, string>();
         private List<string> areas;
+        private bool loadingUserSetting;
         private LogManager log;
         private string sitemapxml = "";
         private SiteMapManager smm;
         private List<Tuple<string, string>> subAreas;
+        private List<TrackedSetting> trackedSettings;
 
         public MainControl()
         {
             InitializeComponent();
 
             log = new LogManager(GetType());
+
+            changedFont = new Font(Font, FontStyle.Bold);
+            trackedSettings = new List<TrackedSetting>
+            {
+                new TrackedSetting(cbbSiteMapArea, label1, UserSettings.HomepageArea),
+                new TrackedSetting(cbbSiteMapSubArea, label2, UserSettings.HomepageSubarea),
+                new TrackedSetting(cbbPagingLimit, label3, UserSettings.PagingLimit),
+                new TrackedSetting(cbbTimeZones, label4, UserSettings.TimeZoneCode),
+                new TrackedSetting(cbbStartupPane, label11, UserSettings.GetStartedPaneContentEnabled),
+                new TrackedSetting(cbbAdvancedFindMode, label12, UserSettings.AdvancedFindStartupMode),
+                new TrackedSetting(cbbCurrencies, label16, UserSettings.TransactionCurrencyId),
+                new TrackedSetting(cbbDefaultDashboard, label21, UserSettings.DefaultDashboardId),
+                new TrackedSetting(cbbSearch, txtSearch, UserSettings.DefaultSearchExperience),
+                new TrackedSetting(cbbCalendar, label5, UserSettings.DefaultCalendarView),
+                new TrackedSetting(cbbWorkStartTime, label6, UserSettings.WorkdayStartTime),
+                new TrackedSetting(cbbWorkStopTime, label7, UserSettings.WorkdayStopTime),
+                new TrackedSetting(cbbSendAsAllowed, label8, UserSettings.IsSendAsAllowed),
+                new TrackedSetting(cbbTrackMessages, label9, UserSettings.IncomingEmailFilteringMethod),
+                new TrackedSetting(cbbCreateRecords, label10, UserSettings.AutoCreateContactOnPromote),
+                new TrackedSetting(cbbAutoDataCaptureEnabled, label28, UserSettings.IsAutoDataCaptureEnabled),
+                new TrackedSetting(cbbShowEmailsAsConversation, label30, UserSettings.IsEmailConversationViewEnabled),
+                new TrackedSetting(cbbReportScriptErrors, label13, UserSettings.ReportScriptErrors),
+                new TrackedSetting(cbbUiLanguage, label14, UserSettings.UILanguageId),
+                new TrackedSetting(cbbHelpLanguage, label15, UserSettings.HelpLanguageId),
+                new TrackedSetting(cbbUseCrmFormAppt, label17, UserSettings.UseCrmFormForAppointment),
+                new TrackedSetting(cbbUseCrmFormContact, label18, UserSettings.UseCrmFormForContact),
+                new TrackedSetting(cbbUseCrmFormEmail, label19, UserSettings.UseCrmFormForEmail),
+                new TrackedSetting(cbbUseCrmFormTask, label20, UserSettings.UseCrmFormForTask),
+                new TrackedSetting(cbbSynchronizeResourceBookingWithOutlook, label29, UserSettings.IsResourceBookingExchangeSyncEnabled),
+                new TrackedSetting(cbbFormat, label22, UserSettings.LocaleId),
+                new TrackedSetting(cbbShowWeekNumber, LblShowWeekNumber, UserSettings.ShowWeekNumber)
+            };
+
+            foreach (var tracked in trackedSettings)
+            {
+                tracked.ComboBox.SelectedIndexChanged += (sender, e) => ShowChangedSettings();
+                tracked.ComboBox.TextChanged += (sender, e) => ShowChangedSettings();
+            }
         }
 
         public event EventHandler<MessageBusEventArgs> OnOutgoingMessage;
@@ -38,6 +83,20 @@ namespace MsCrmTools.UserSettingsUtility
         public string UserName => "MscrmTools";
 
         public void LoadCurrentUserSetting(Entity settings)
+        {
+            loadingUserSetting = true;
+            try
+            {
+                ShowUserSetting(settings);
+            }
+            finally
+            {
+                loadingUserSetting = false;
+                RememberLoadedValues();
+            }
+        }
+
+        private void ShowUserSetting(Entity settings)
         {
             SelectItemOrNoChange(cbbSiteMapArea, settings.GetAttributeValue<string>(UserSettings.HomepageArea));
             SelectItemOrNoChange(cbbSiteMapSubArea, settings.GetAttributeValue<string>(UserSettings.HomepageSubarea));
@@ -378,6 +437,7 @@ namespace MsCrmTools.UserSettingsUtility
                             .ToArray());
                         cbbFormat.SelectedIndex = 0;
 
+                        RememberLoadedValues();
                         panel1.Enabled = true;
                     }
                 },
@@ -452,6 +512,51 @@ namespace MsCrmTools.UserSettingsUtility
             cbbSiteMapSubArea.SelectedIndex = 0;
         }
 
+        private static string ValueOf(ComboBox comboBox)
+        {
+            // The index tells two dashboards of the same name apart, but a typed work time has none
+            return comboBox.DropDownStyle == ComboBoxStyle.DropDown
+                ? comboBox.Text.Trim()
+                : comboBox.SelectedIndex + "|" + comboBox.Text;
+        }
+
+        private bool IsChanged(ComboBox comboBox)
+        {
+            var text = comboBox.Text.Trim();
+            if (text.Length == 0 || text == NO_CHANGE) return false;
+
+            loadedValues.TryGetValue(comboBox, out var loaded);
+            return loaded != ValueOf(comboBox);
+        }
+
+        private void RememberLoadedValues()
+        {
+            foreach (var tracked in trackedSettings)
+            {
+                loadedValues[tracked.ComboBox] = ValueOf(tracked.ComboBox);
+            }
+
+            ShowChangedSettings();
+        }
+
+        private void ShowChangedSettings()
+        {
+            if (loadingUserSetting) return;
+
+            var changed = trackedSettings.Where(t => IsChanged(t.ComboBox)).ToList();
+            foreach (var tracked in trackedSettings)
+            {
+                var isChanged = changed.Contains(tracked);
+                tracked.Label.Font = isChanged ? changedFont : null;
+                tracked.Label.ForeColor = isChanged ? SystemColors.HotTrack : Color.Empty;
+            }
+
+            tsbUpdateUserSettings.Text = changed.Count == 0 ? UPDATE_BUTTON_TEXT : $"{UPDATE_BUTTON_TEXT} ({changed.Count} changed)";
+            tsbUpdateUserSettings.ToolTipText = changed.Count == 0
+                ? UPDATE_BUTTON_TEXT
+                : "Will update: " + string.Join(", ", changed.Select(t => t.Label.Text));
+        }
+
         private static void SelectItemOrNoChange(ComboBox comboBox, string value)
         {
             if (comboBox.Items.Count == 0) return;
@@ -521,6 +626,7 @@ namespace MsCrmTools.UserSettingsUtility
             txtNumberFormat.Text = "";
             txtShortDateFormat.Text = "";
             txtTimeFormat.Text = "";
+            RememberLoadedValues();
         }
 
         private void tsbUpdateUserSettings_Click(object sender, EventArgs e)
@@ -578,10 +684,9 @@ namespace MsCrmTools.UserSettingsUtility
             // Both lists can be typed into, so read the text rather than the selected item
             var workStartTime = cbbWorkStartTime.Text.Trim();
             var workStopTime = cbbWorkStopTime.Text.Trim();
-            foreach (var time in new[] { workStartTime, workStopTime })
+            foreach (var time in new[] { cbbWorkStartTime, cbbWorkStopTime }.Where(IsChanged).Select(c => c.Text.Trim()))
             {
-                if (time.Length != 0 && time != "No change"
-                    && !DateTime.TryParseExact(time, new[] { "H:mm", "HH:mm" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                if (!DateTime.TryParseExact(time, new[] { "H:mm", "HH:mm" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
                 {
                     MessageBox.Show(this, $"\"{time}\" is not a valid work time. Use the format HH:mm, for example 08:30.", "Warning", MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
@@ -652,6 +757,20 @@ namespace MsCrmTools.UserSettingsUtility
 
             #endregion Initialisation des données à mettre à jour
 
+            // Clicking a user fills the form with that user's settings: only what was changed
+            // since then goes to the ticked users, or the clicked user's values would go with it
+            foreach (var tracked in trackedSettings.Where(t => !IsChanged(t.ComboBox)))
+            {
+                setting.Attributes.Remove(tracked.Attribute);
+            }
+
+            if (setting.Attributes.Count == 0)
+            {
+                MessageBox.Show(this, "No setting has been changed!", "Warning", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
             if (File.Exists(log.FilePath))
             {
                 var result = MessageBox.Show(this,
@@ -712,6 +831,20 @@ namespace MsCrmTools.UserSettingsUtility
                 },
                 ProgressChanged = evt => { SetWorkingMessage(evt.UserState.ToString()); }
             });
+        }
+
+        private class TrackedSetting
+        {
+            public TrackedSetting(ComboBox comboBox, Control label, string attribute)
+            {
+                ComboBox = comboBox;
+                Label = label;
+                Attribute = attribute;
+            }
+
+            public string Attribute { get; }
+            public ComboBox ComboBox { get; }
+            public Control Label { get; }
         }
     }
 }

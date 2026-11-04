@@ -118,16 +118,18 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
                     userSetting[UserSettings.Fields.DefaultCalendarView] =
                         settings.GetAttributeValue<int?>(UserSettings.Fields.DefaultCalendarView);
 
-                if (settings.GetAttributeValue<string>(UserSettings.Fields.HomepageArea) != "No change")
+                if (settings.Contains(UserSettings.Fields.HomepageArea)
+                    && settings.GetAttributeValue<string>(UserSettings.Fields.HomepageArea) != "No change")
                     userSetting[UserSettings.Fields.HomepageArea] =
                         settings.GetAttributeValue<string>(UserSettings.Fields.HomepageArea);
 
-                if (settings.GetAttributeValue<string>(UserSettings.Fields.HomepageSubarea) != "No change")
+                if (settings.Contains(UserSettings.Fields.HomepageSubarea)
+                    && settings.GetAttributeValue<string>(UserSettings.Fields.HomepageSubarea) != "No change")
                     userSetting[UserSettings.Fields.HomepageSubarea] =
                         settings.GetAttributeValue<string>(UserSettings.Fields.HomepageSubarea);
 
                 if (settings.GetAttributeValue<OptionSetValue>(UserSettings.Fields.IncomingEmailFilteringMethod)
-                        .Value >= 0)
+                        ?.Value >= 0)
                     userSetting[UserSettings.Fields.IncomingEmailFilteringMethod] =
                         settings.GetAttributeValue<OptionSetValue>(UserSettings.Fields.IncomingEmailFilteringMethod);
 
@@ -149,7 +151,7 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
                     userSetting[UserSettings.Fields.WorkdayStopTime] =
                         settings.GetAttributeValue<string>(UserSettings.Fields.WorkdayStopTime);
 
-                if (settings.GetAttributeValue<OptionSetValue>(UserSettings.Fields.ReportScriptErrors).Value >= 1)
+                if (settings.GetAttributeValue<OptionSetValue>(UserSettings.Fields.ReportScriptErrors)?.Value >= 1)
                     userSetting[UserSettings.Fields.ReportScriptErrors] =
                         settings.GetAttributeValue<OptionSetValue>(UserSettings.Fields.ReportScriptErrors);
 
@@ -206,7 +208,7 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
                     userSetting[UserSettings.Fields.LocaleId] =
                         settings.GetAttributeValue<int?>(UserSettings.Fields.LocaleId).Value;
 
-                if (settings.GetAttributeValue<OptionSetValue>(UserSettings.Fields.DefaultSearchExperience).Value >= 0)
+                if (settings.GetAttributeValue<OptionSetValue>(UserSettings.Fields.DefaultSearchExperience)?.Value >= 0)
                     userSetting[UserSettings.Fields.DefaultSearchExperience] =
                         settings.GetAttributeValue<OptionSetValue>(UserSettings.Fields.DefaultSearchExperience);
 
