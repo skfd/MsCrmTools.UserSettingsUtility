@@ -30,6 +30,7 @@ namespace UserSettings.Harness
                     org => { Forget(org, 0, "homepagesubarea"); Forget(org, 1, "homepagesubarea"); }),
                 TimeZoneForTwoUsers("time-zone-no-home", "both users have neither area nor tab", true,
                     org => { Forget(org, 0, "homepagearea", "homepagesubarea"); Forget(org, 1, "homepagearea", "homepagesubarea"); }),
+                FailedReloadThenUpdate(),
                 TimeZoneForTwoUsers("time-zone-first-no-tab", "only the first user clicked has no tab", true,
                     org => Forget(org, 0, "homepagesubarea")),
                 TimeZoneForTwoUsers("time-zone-ticks-only", "no tab, but the users are ticked and never clicked", false,
@@ -343,6 +344,53 @@ namespace UserSettings.Harness
                         r.Check(keys.SequenceEqual(new[] { "timezonecode" }),
                             "an update wrote more than the time zone: " + string.Join(", ", keys));
                     }
+                });
+        }
+
+        /// <summary>
+        /// Load empties three lists before it starts and only refills them if it works, while the
+        /// form stays enabled from the Load before.
+        /// </summary>
+        private static Scenario FailedReloadThenUpdate()
+        {
+            return new Scenario
+                {
+                    Name = "failed-reload-then-update",
+                    Why = "a second Load fails, then Update, then the app list, then Update",
+                    Survive = true,
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Do("press Load with the org down", r =>
+                {
+                    r.Fake.Down = true;
+                    r.Find<ToolStripButton>("tsbLoadCrmItems").PerformClick();
+                })
+                .WaitFor("the tool to report it", r => r.Dialogs.Any(d => d.Contains("An error occured")))
+                .Do("bring the org back and tick a user", r =>
+                {
+                    r.Fake.Down = false;
+                    Console.WriteLine("    form enabled " + r.Find<Panel>("panel1").Enabled
+                                      + ", time zones listed " + r.Find<ComboBox>("cbbTimeZones").Items.Count
+                                      + ", time zone index " + r.Find<ComboBox>("cbbTimeZones").SelectedIndex);
+                    r.Users.Items[0].Checked = true;
+                })
+                .Do("press Update", r => PressUpdate(r, "first save"))
+                .Pause("anything it started to finish", 1000)
+                .Do("flip the app list and press Update", r =>
+                {
+                    var apps = r.Find<ToolStripComboBox>("applist");
+                    var was = apps.SelectedIndex;
+                    apps.SelectedIndex = was == 0 ? 1 : 0;
+                    apps.SelectedIndex = was;
+                    PressUpdate(r, "after the app list");
+                })
+                .Pause("that to finish", 1000)
+                .Do("report", r =>
+                {
+                    foreach (var thrown in r.Thrown) Console.WriteLine("    threw " + thrown);
+                    foreach (var dialog in r.Dialogs.Skip(1)) Console.WriteLine("    dialog " + dialog);
+                    r.Check(r.Thrown.Count == 0, "the tool threw " + r.Thrown.Count + " time(s)");
                 });
         }
 

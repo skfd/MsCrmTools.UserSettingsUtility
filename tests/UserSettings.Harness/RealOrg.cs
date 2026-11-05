@@ -53,6 +53,13 @@ namespace UserSettings.Harness
             {
                 Console.WriteLine("  " + group.Count() + "  " + group.Key);
             }
+
+            var nullTabs = client.RetrieveMultiple(new FetchExpression(
+                "<fetch aggregate='true'><entity name='usersettings'>"
+                + "<attribute name='systemuserid' alias='rows' aggregate='count' />"
+                + "<filter><condition attribute='homepagesubarea' operator='null' /></filter>"
+                + "</entity></fetch>")).Entities.Single();
+            Console.WriteLine("fetch for a null tab finds " + nullTabs.GetAttributeValue<AliasedValue>("rows").Value);
         }
 
         private static Entity ReadSettings(IOrganizationService service, Guid userId)

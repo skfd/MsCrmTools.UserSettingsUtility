@@ -35,6 +35,9 @@ namespace UserSettings.Harness
         public readonly string Name;
         public Guid CallerId { get; set; }
 
+        /// <summary>Every request fails while this is set, the way a dropped connection does.</summary>
+        public bool Down;
+
         /// <summary>How long a usersettings read takes, so that waiting on one shows.</summary>
         public int SettingsLatencyMs;
 
@@ -160,6 +163,7 @@ namespace UserSettings.Harness
 
         public OrganizationResponse Execute(OrganizationRequest request)
         {
+            if (Down) throw new InvalidOperationException(Name + " cannot be reached");
             Record("Execute " + request.RequestName);
 
             switch (request)
@@ -200,6 +204,7 @@ namespace UserSettings.Harness
 
         public EntityCollection RetrieveMultiple(QueryBase query)
         {
+            if (Down) throw new InvalidOperationException(Name + " cannot be reached");
             switch (query)
             {
                 case FetchExpression fetch:
