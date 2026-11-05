@@ -186,10 +186,6 @@ namespace MsCrmTools.UserSettingsUtility
 
         public void LoadSettings()
         {
-            cbbSiteMapArea.Items.Clear();
-            cbbSiteMapSubArea.Items.Clear();
-            cbbTimeZones.Items.Clear();
-
             var ush = new UserSettingsHelper(Service, ConnectionDetail);
             smm = new SiteMapManager(Service, ConnectionDetail);
 
