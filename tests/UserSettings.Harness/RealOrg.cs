@@ -30,6 +30,31 @@ namespace UserSettings.Harness
                 + ";LoginPrompt=Never;RequireNewInstance=True");
         }
 
+        /// <summary>
+        /// Read only, counts and no names: what the org's users have as home page, because a null
+        /// and an empty string behave differently in the tool's lists.
+        /// </summary>
+        public static void CountHomePages(CrmServiceClient client)
+        {
+            Func<Entity, string, string> shown = (row, attribute) =>
+            {
+                var value = row.GetAttributeValue<string>(attribute);
+                return value == null ? "(null)" : value.Length == 0 ? "(empty)" : value;
+            };
+
+            var rows = client.RetrieveMultiple(new QueryExpression("usersettings")
+            {
+                ColumnSet = new ColumnSet("homepagearea", "homepagesubarea")
+            }).Entities;
+
+            Console.WriteLine(rows.Count + " usersettings rows");
+            foreach (var group in rows.GroupBy(r => "area " + shown(r, "homepagearea") + ", tab " + shown(r, "homepagesubarea"))
+                         .OrderByDescending(g => g.Count()))
+            {
+                Console.WriteLine("  " + group.Count() + "  " + group.Key);
+            }
+        }
+
         private static Entity ReadSettings(IOrganizationService service, Guid userId)
         {
             return service.RetrieveMultiple(new QueryByAttribute("usersettings")

@@ -46,6 +46,19 @@ namespace UserSettings.Harness
                 return failed == 0 ? 0 : 1;
             }
 
+            if (args.Length >= 4 && args[0] == "org-home-pages")
+            {
+                var client = RealOrg.Connect(args[1], args[2], args[3]);
+                if (!client.IsReady)
+                {
+                    Console.Error.WriteLine("Could not sign in: " + client.LastCrmError);
+                    return 3;
+                }
+
+                RealOrg.CountHomePages(client);
+                return 0;
+            }
+
             if (args.Length >= 5 && args[0] == "org-time-zone")
             {
                 var client = RealOrg.Connect(args[1], args[2], args[3]);
