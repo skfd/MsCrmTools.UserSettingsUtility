@@ -96,6 +96,16 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
             bw.DoWork += (sender, e) => { e.Result = QueryHelper.GetItems(e.Argument.ToString(), service); };
             bw.RunWorkerCompleted += (sender, e) =>
             {
+                if (IsDisposed) return;
+
+                if (e.Error != null)
+                {
+                    // The filter refills the list from these, and they belong to the last view
+                    items.Clear();
+                    MessageBox.Show(this, $@"Unable to load the users: {e.Error.Message}", @"Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
                 var records = (EntityCollection)e.Result;
                 if (records.EntityName == "systemuser")
                 {
@@ -229,6 +239,9 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
         private void selectionTimer_Tick(object sender, EventArgs e)
         {
             selectionTimer.Stop();
+
+            // A row clicked just before Update would be read in the middle of it, as someone else
+            if (!Enabled) return;
 
             var item = lvUsers.FocusedItem != null && lvUsers.FocusedItem.Selected
                 ? lvUsers.FocusedItem

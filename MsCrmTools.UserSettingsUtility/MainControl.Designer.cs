@@ -38,6 +38,7 @@
             this.tsbEditInFXB = new System.Windows.Forms.ToolStripButton();
             this.toolStripSeparator3 = new System.Windows.Forms.ToolStripSeparator();
             this.tsbUpdateUserSettings = new System.Windows.Forms.ToolStripButton();
+            this.tsbCancelUpdate = new System.Windows.Forms.ToolStripButton();
             this.toolStripSeparator4 = new System.Windows.Forms.ToolStripSeparator();
             this.LblSiteMap = new System.Windows.Forms.ToolStripLabel();
             this.applist = new System.Windows.Forms.ToolStripComboBox();
@@ -148,6 +149,7 @@
             this.tsbEditInFXB,
             this.toolStripSeparator3,
             this.tsbUpdateUserSettings,
+            this.tsbCancelUpdate,
             this.toolStripSeparator4,
             this.LblSiteMap,
             this.applist,
@@ -213,6 +215,15 @@
             this.tsbUpdateUserSettings.Size = new System.Drawing.Size(225, 29);
             this.tsbUpdateUserSettings.Text = "Update User(s) Settings";
             this.tsbUpdateUserSettings.Click += new System.EventHandler(this.tsbUpdateUserSettings_Click);
+            //
+            // tsbCancelUpdate
+            //
+            this.tsbCancelUpdate.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.tsbCancelUpdate.Name = "tsbCancelUpdate";
+            this.tsbCancelUpdate.Size = new System.Drawing.Size(100, 29);
+            this.tsbCancelUpdate.Text = "Stop update";
+            this.tsbCancelUpdate.Visible = false;
+            this.tsbCancelUpdate.Click += new System.EventHandler(this.tsbCancelUpdate_Click);
             // 
             // toolStripSeparator4
             // 
@@ -1381,6 +1392,7 @@
         private System.Windows.Forms.ComboBox cbbSiteMapArea;
         private System.Windows.Forms.ToolStripSeparator toolStripSeparator2;
         private System.Windows.Forms.ToolStripButton tsbUpdateUserSettings;
+        private System.Windows.Forms.ToolStripButton tsbCancelUpdate;
         private System.Windows.Forms.GroupBox gbPrivacy;
         private System.Windows.Forms.Label label13;
         private System.Windows.Forms.ComboBox cbbReportScriptErrors;

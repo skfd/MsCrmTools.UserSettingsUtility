@@ -23,12 +23,14 @@ namespace MsCrmTools.UserSettingsUtility
         private readonly Font changedFont;
         private readonly Dictionary<ComboBox, string> loadedValues = new Dictionary<ComboBox, string>();
         private List<string> areas;
+        private volatile bool cancelUpdate;
         private bool loadingUserSetting;
         private LogManager log;
         private string sitemapxml = "";
         private SiteMapManager smm;
         private List<Tuple<string, string>> subAreas;
         private List<TrackedSetting> trackedSettings;
+        private bool updating;
 
         public MainControl()
         {
@@ -249,7 +251,7 @@ namespace MsCrmTools.UserSettingsUtility
             var ush = new UserSettingsHelper(Service, ConnectionDetail);
             smm = new SiteMapManager(Service, ConnectionDetail);
 
-            tsbLoadCrmItems.Enabled = false;
+            SetBusy(true);
 
             WorkAsync(new WorkAsyncInfo
             {
@@ -292,7 +294,7 @@ namespace MsCrmTools.UserSettingsUtility
                 },
                 PostWorkCallBack = e =>
                 {
-                    tsbLoadCrmItems.Enabled = true;
+                    SetBusy(false);
 
                     if (e.Error != null)
                     {
@@ -446,6 +448,13 @@ namespace MsCrmTools.UserSettingsUtility
         {
             if (message.SourcePlugin == "FetchXML Builder")
             {
+                if (updating)
+                {
+                    MessageBox.Show(this, "The users can't be changed during an update. Send them again once it has finished.", "Warning", MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+
                 var fetchXml = (string)message.TargetArgument;
                 if (Service != null && userSelector1.Service == null)
                 {
@@ -585,9 +594,28 @@ namespace MsCrmTools.UserSettingsUtility
             comboBox.SelectedIndex = index < 0 ? 0 : index;
         }
 
+        private void SetBusy(bool busy)
+        {
+            // Service is one connection, and Update points it at each user in turn: anything else
+            // using it meanwhile runs as that user, and a second Update leaves it pointing at one
+            tsbLoadCrmItems.Enabled = !busy;
+            tsbEditInFXB.Enabled = !busy;
+            tsbUpdateUserSettings.Enabled = !busy;
+            applist.Enabled = !busy;
+            userSelector1.Enabled = !busy;
+        }
+
         private void TsbCloseClick(object sender, EventArgs e)
         {
             CloseTool();
+        }
+
+        private void tsbCancelUpdate_Click(object sender, EventArgs e)
+        {
+            // The write on the wire still lands, and the users after it don't
+            cancelUpdate = true;
+            tsbCancelUpdate.Enabled = false;
+            tsbCancelUpdate.Text = "Stopping...";
         }
 
         private void tsbEditInFXB_Click(object sender, EventArgs e)
@@ -808,10 +836,20 @@ namespace MsCrmTools.UserSettingsUtility
                 }
             }
 
+            var users = userSelector1.SelectedItems;
+            var processed = 0;
+
+            cancelUpdate = false;
+            updating = true;
+            SetBusy(true);
+            tsbCancelUpdate.Text = "Stop update";
+            tsbCancelUpdate.Enabled = true;
+            tsbCancelUpdate.Visible = true;
+
             WorkAsync(new WorkAsyncInfo
             {
                 Message = "Initializing update...",
-                AsyncArgument = new Tuple<List<Entity>, Entity>(userSelector1.SelectedItems, setting),
+                AsyncArgument = new Tuple<List<Entity>, Entity>(users, setting),
                 Work = (bw, evt) =>
                 {
                     var updateUserSettings = (Tuple<List<Entity>, Entity>)evt.Argument;
@@ -830,13 +868,24 @@ namespace MsCrmTools.UserSettingsUtility
 
                     foreach (var updateUserSetting in updateUserSettings.Item1)
                     {
+                        // Closing the tool stops it too: nobody could see the rest or stop them
+                        if (cancelUpdate || IsDisposed) break;
+
                         string userFullName = updateUserSetting.GetAttributeValue<string>("fullname");
                         bw.ReportProgress(0, "Updating settings for user " + userFullName);
                         ush.UpdateSettings(updateUserSetting.Id, userFullName, updateUserSettings.Item2);
+                        processed++;
                     }
                 },
                 PostWorkCallBack = evt =>
                 {
+                    // The callback still arrives after the tool has been closed
+                    if (IsDisposed) return;
+
+                    updating = false;
+                    SetBusy(false);
+                    tsbCancelUpdate.Visible = false;
+
                     // Also replaces a read that ran during the update, while Service was
                     // impersonating one of the users
                     userSelector1.ReadStoredSettings();
@@ -851,14 +900,19 @@ namespace MsCrmTools.UserSettingsUtility
                         }
                     }
 
-                    var message = "Do you want to open log file?";
+                    var message = cancelUpdate
+                        ? $"Stopped after {processed} of {users.Count} user(s). Do you want to open log file?"
+                        : "Do you want to open log file?";
                     if (MessageBox.Show(this, message, @"Question", MessageBoxButtons.YesNo, MessageBoxIcon.Question) ==
                         DialogResult.Yes)
                     {
                         log.OpenLog();
                     }
                 },
-                ProgressChanged = evt => { SetWorkingMessage(evt.UserState.ToString()); }
+                ProgressChanged = evt =>
+                {
+                    if (!IsDisposed) SetWorkingMessage(evt.UserState.ToString());
+                }
             });
         }
 
