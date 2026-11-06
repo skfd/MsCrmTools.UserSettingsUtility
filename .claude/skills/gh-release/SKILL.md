@@ -11,7 +11,7 @@ ad hoc builds for local install, not versions.
 - **Target the fork on every call:** `gh ... -R skfd/MsCrmTools.UserSettingsUtility`. Bare `gh`
   resolves to the `upstream` remote.
 - **Build from `e2e`,** which merges every fix branch. Check each one is an ancestor of it first.
-  `master` follows upstream and holds only what has gone there.
+  `master` doesn't have them all. Upstream PRs come later, as one series.
 - **Build with MSBuild, not `dotnet publish`:** .NET Framework with packages.config. The restore
   and build commands are in `tests/fake.ps1`. The artifact is `bin\Release\MsCrmTools.UserSettingsUtility.dll`,
   the only file the nuspec ships, plus a zip of it.
