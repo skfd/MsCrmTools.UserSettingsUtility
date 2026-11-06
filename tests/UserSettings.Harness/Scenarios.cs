@@ -51,7 +51,15 @@ namespace UserSettings.Harness
                 CountWaitsForTheRead(),
                 OlderReadCannotOverwriteCounts(),
                 FailedReadIsNotACount(),
-                CountsCoverEveryBatch()
+                CountsCoverEveryBatch(),
+                UpdatePressedTwiceWritesOnce(),
+                RowClickedDuringUpdateWaits(),
+                StopUpdateLeavesTheRest(),
+                ButtonsComeBackAfterFailures(),
+                LoadBlocksUpdate(),
+                FailedUserListSaysSo(),
+                FetchXmlBuilderWaitsForUpdate(),
+                ClosingDuringUpdate()
             };
         }
 
@@ -640,6 +648,194 @@ namespace UserSettings.Harness
                     var reads = r.Fake.Calls.Count(c => c.What.StartsWith("Bulk read"));
                     r.Check(reads == 3, reads + " reads for 1200 users, not 3");
                     r.Check(tickMs < 3000, "ticking held the window for " + tickMs + "ms");
+                });
+        }
+
+        private static Scenario Busy(this Scenario scenario, int latencyMs, int ticked, Action<Run> alongside)
+        {
+            return scenario
+                .Do("pick a paging limit of 100", r => r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100")
+                .Do("tick " + ticked + " users, press Update and carry on", r =>
+                {
+                    for (var i = 0; i < ticked; i++) r.Users.Items[i].Checked = true;
+                    r.Fake.SettingsLatencyMs = latencyMs;
+                    r.Fake.ForgetCalls();
+                    r.Find<ToolStripButton>("tsbUpdateUserSettings").PerformClick();
+                    alongside(r);
+                });
+        }
+
+        private static void CheckOwnConnection(Run r)
+        {
+            r.Check(r.Fake.CallerId == Guid.Empty, "the connection was left impersonating " + r.Fake.CallerId);
+            r.Check(r.Find<ToolStripButton>("tsbUpdateUserSettings").Enabled, "Update stayed disabled");
+            r.Check(r.Find<ToolStripButton>("tsbLoadCrmItems").Enabled, "Load stayed disabled");
+            r.Check(!r.Find<ToolStripButton>("tsbCancelUpdate").Visible, "Stop update stayed on the toolbar");
+        }
+
+        private static Scenario UpdatePressedTwiceWritesOnce()
+        {
+            return new Scenario
+                {
+                    Name = "update-pressed-twice-writes-once",
+                    Why = "fix/update-while-running: a second Update wrote as the wrong user and left the connection impersonating",
+                    Org = () => FakeOrg.Sample("Org A", 6)
+                }
+                .Loaded(6)
+                .Busy(150, 5, r => r.Find<ToolStripButton>("tsbUpdateUserSettings").PerformClick())
+                .WaitFor("the update to finish", r => r.Dialogs.Any(d => d.Contains("Do you want to open log file?")), 30000)
+                .Pause("let a second update show itself", 1500)
+                .Do("ask the org what was written", r =>
+                {
+                    var writes = Updates(r);
+                    r.Check(writes.Count == 5, writes.Count + " writes, not 5");
+                    r.Check(writes.All(w => w.CallerId == w.Written.Id), "a write ran as another user");
+                    CheckOwnConnection(r);
+                });
+        }
+
+        private static Scenario RowClickedDuringUpdateWaits()
+        {
+            return new Scenario
+                {
+                    Name = "row-clicked-during-update-waits",
+                    Why = "fix/update-while-running: a row clicked during Update was read as the user being updated",
+                    Org = () => FakeOrg.Sample("Org A", 6)
+                }
+                .Loaded(6)
+                .Busy(300, 5, r =>
+                {
+                    r.Users.SelectedItems.Clear();
+                    r.Users.Items[5].Selected = true;
+                    r.Users.FocusedItem = r.Users.Items[5];
+                })
+                .WaitFor("the update to finish", r => r.Dialogs.Any(d => d.Contains("Do you want to open log file?")), 30000)
+                .Do("ask the org who read user 6", r =>
+                {
+                    var six = "RetrieveMultiple usersettings " + UserId(5);
+                    r.Check(r.Fake.Calls.All(c => c.What != six), "user 6 was read during the update");
+                    CheckOwnConnection(r);
+                });
+        }
+
+        private static Scenario StopUpdateLeavesTheRest()
+        {
+            return new Scenario
+                {
+                    Name = "stop-update-leaves-the-rest",
+                    Why = "fix/update-while-running: Stop update finishes the user in hand and writes no more",
+                    Org = () => FakeOrg.Sample("Org A", 6)
+                }
+                .Loaded(6)
+                .Busy(300, 6, r =>
+                    r.Check(r.Find<ToolStripButton>("tsbCancelUpdate").Visible, "there is no way to stop the update"))
+                .WaitFor("the first user to be written", r => Updates(r).Count >= 1, 10000)
+                .Do("press Stop update", r => r.Find<ToolStripButton>("tsbCancelUpdate").PerformClick())
+                .WaitFor("the tool to say where it stopped", r => r.Dialogs.Any(d => d.Contains("Stopped after")), 10000)
+                .Pause("let any more writes arrive", 1000)
+                .Do("ask the org what was written", r =>
+                {
+                    var writes = Updates(r).Count;
+                    r.Check(writes >= 1 && writes < 6, writes + " of 6 users were written");
+                    r.Check(r.Dialogs.Any(d => d.Contains("Stopped after " + writes + " of 6")),
+                        "wrote " + writes + " but said: " + string.Join(" | ", r.Dialogs));
+                    CheckOwnConnection(r);
+                });
+        }
+
+        private static Scenario ButtonsComeBackAfterFailures()
+        {
+            return new Scenario
+                {
+                    Name = "buttons-come-back-after-failures",
+                    Why = "fix/update-while-running: a failed Update and a failed Load both give the window back",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Busy(0, 2, r => r.Fake.Down = true)
+                .WaitFor("the update to finish", r => r.Dialogs.Any(d => d.Contains("Do you want to open log file?")), 30000)
+                .Do("look at the toolbar", CheckOwnConnection)
+                .Do("press Load with the connection down", r => r.Find<ToolStripButton>("tsbLoadCrmItems").PerformClick())
+                .WaitFor("Load to fail", r => r.Dialogs.Any(d => d.Contains("An error occured")), 10000)
+                .Do("look at the toolbar again", CheckOwnConnection);
+        }
+
+        private static Scenario LoadBlocksUpdate()
+        {
+            return new Scenario
+                {
+                    Name = "load-blocks-update",
+                    Why = "fix/update-while-running: Update during a reload would impersonate under Load's reads",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Do("press Load and look at Update", r =>
+                {
+                    r.Find<ToolStripButton>("tsbLoadCrmItems").PerformClick();
+                    r.Check(!r.Find<ToolStripButton>("tsbUpdateUserSettings").Enabled, "Update can be pressed during Load");
+                })
+                .WaitFor("Load to finish", r => r.Find<ToolStripButton>("tsbUpdateUserSettings").Enabled);
+        }
+
+        private static Scenario FailedUserListSaysSo()
+        {
+            return new Scenario
+                {
+                    Name = "failed-user-list-says-so",
+                    Why = "fix/update-while-running: a user list that failed to load threw instead of saying so",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Do("lose the connection and fill the list again", r =>
+                {
+                    r.Fake.Down = true;
+                    var selector = Ui.Field<object>(r.Control, "userSelector1");
+                    selector.GetType().GetMethod("PopulateUsers").Invoke(selector,
+                        new object[] { "<fetch><entity name='systemuser'><attribute name='fullname' /></entity></fetch>" });
+                })
+                .WaitFor("the tool to say so", r => r.Dialogs.Any(d => d.Contains("Unable to load the users")), 5000)
+                .Do("type in the filter", r => r.Find<TextBox>("txtFilter").Text = "Org")
+                .Pause("let the filter run", 500)
+                .Do("count the rows", r => r.Check(r.Users.Items.Count == 0, "the old view's " + r.Users.Items.Count + " users came back"));
+        }
+
+        private static Scenario FetchXmlBuilderWaitsForUpdate()
+        {
+            return new Scenario
+                {
+                    Name = "fetchxml-builder-waits-for-update",
+                    Why = "fix/update-while-running: users sent from FetchXML Builder during Update were read as the user being updated",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Busy(400, 3, r => r.Control.OnIncomingMessage(new XrmToolBox.Extensibility.MessageBusEventArgs("User Settings Utility")
+                {
+                    SourcePlugin = "FetchXML Builder",
+                    TargetArgument = "<fetch><entity name='systemuser'><attribute name='fullname' /></entity></fetch>"
+                }))
+                .WaitFor("the update to finish", r => r.Dialogs.Any(d => d.Contains("Do you want to open log file?")), 30000)
+                .Do("ask the org what was read", r =>
+                {
+                    r.Check(r.Dialogs.Any(d => d.Contains("can't be changed during an update")), "nothing said the users were refused");
+                    r.Check(r.Fake.Calls.All(c => c.What != "RetrieveMultiple systemuser"), "the users were read during the update");
+                });
+        }
+
+        private static Scenario ClosingDuringUpdate()
+        {
+            return new Scenario
+                {
+                    Name = "closing-during-update",
+                    Why = "fix/update-while-running: closing the tool stops the update, and its callbacks find nothing to touch",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Busy(200, 2, r => r.Control.Dispose())
+                .Pause("let the callback land", 1500)
+                .Do("ask the org what happened", r =>
+                {
+                    r.Check(Updates(r).Count < 2, "both users were written after the tool closed");
+                    r.Check(r.Fake.CallerId == Guid.Empty, "the connection was left impersonating " + r.Fake.CallerId);
                 });
         }
 
