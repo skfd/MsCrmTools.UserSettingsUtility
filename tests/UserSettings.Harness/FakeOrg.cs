@@ -41,10 +41,14 @@ namespace UserSettings.Harness
         /// <summary>How long a usersettings read takes, so that waiting on one shows.</summary>
         public int SettingsLatencyMs;
 
+        /// <summary>How long each read of many users' settings takes, in turn. Empty means at once.</summary>
+        public readonly Queue<int> BulkSettingsLatencyMs = new Queue<int>();
+
         public readonly List<Entity> Users = new List<Entity>();
         public readonly Dictionary<Guid, Entity> Settings = new Dictionary<Guid, Entity>();
         public readonly List<Entity> SiteMaps = new List<Entity>();
         public readonly List<Entity> AppComponents = new List<Entity>();
+        public readonly List<Entity> Currencies = new List<Entity>();
 
         private readonly List<Call> _calls = new List<Call>();
 
@@ -210,7 +214,9 @@ namespace UserSettings.Harness
                 case FetchExpression fetch:
                     var entity = XDocument.Parse(fetch.Query).Descendants("entity").First().Attribute("name").Value;
                     Record("RetrieveMultiple " + entity);
-                    if (entity == "transactioncurrency" || entity == "systemform")
+                    if (entity == "transactioncurrency")
+                        return Collection(entity, Currencies.Select(Copy));
+                    if (entity == "systemform")
                         return new EntityCollection { EntityName = entity };
                     break;
 
@@ -224,6 +230,9 @@ namespace UserSettings.Harness
                         if (Settings.TryGetValue(userId, out var row)) found.Entities.Add(Project(row, byAttribute.ColumnSet));
                     }
                     return found;
+
+                case QueryExpression bulk when bulk.EntityName == "usersettings":
+                    return SettingsOfMany(bulk);
 
                 case QueryExpression expression:
                     Record("RetrieveMultiple " + expression.EntityName);
@@ -253,6 +262,29 @@ namespace UserSettings.Harness
             }
 
             throw new NotSupportedException(Name + " does not know the query " + query.GetType().Name);
+        }
+
+        /// <summary>
+        /// The answer is settled when the question arrives and only then slept on, so a slow read
+        /// comes back holding what the org held when it was asked.
+        /// </summary>
+        private EntityCollection SettingsOfMany(QueryExpression query)
+        {
+            var ids = query.Criteria.Conditions
+                .Single(c => c.AttributeName == "systemuserid" && c.Operator == ConditionOperator.In)
+                .Values.Cast<Guid>().ToList();
+            Record("Bulk read of usersettings for " + ids.Count + " users");
+
+            EntityCollection answer;
+            int latency;
+            lock (Settings)
+            {
+                answer = Collection("usersettings", ids.Where(Settings.ContainsKey).Select(id => Copy(Settings[id])));
+                latency = BulkSettingsLatencyMs.Count > 0 ? BulkSettingsLatencyMs.Dequeue() : 0;
+            }
+
+            if (latency > 0) Thread.Sleep(latency);
+            return answer;
         }
 
         public void Update(Entity entity)

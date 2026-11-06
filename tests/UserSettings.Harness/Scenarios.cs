@@ -44,7 +44,14 @@ namespace UserSettings.Harness
                 ChangedFieldsAreMarked(),
                 NothingChangedSendsNothing(),
                 ResetThenPickSendsTheValue(),
-                AreaFromAnotherAppIsSent()
+                AreaFromAnotherAppIsSent(),
+                EachRowCountsItsOwnChanges(),
+                CountsFallAfterUpdate(),
+                FilterIgnoresTheCounts(),
+                CountWaitsForTheRead(),
+                OlderReadCannotOverwriteCounts(),
+                FailedReadIsNotACount(),
+                CountsCoverEveryBatch()
             };
         }
 
@@ -438,6 +445,201 @@ namespace UserSettings.Harness
                 {
                     r.Find<ToolStripButton>("tsbReset").PerformClick();
                     CheckMarks(r, 0);
+                });
+        }
+
+        private static string Counts(Run r)
+        {
+            return string.Join(",", r.Users.Items.Cast<ListViewItem>().Select(i => "[" + i.SubItems[3].Text + "]"));
+        }
+
+        private static Scenario Tick(this Scenario scenario, params int[] users)
+        {
+            return scenario.Do("tick users " + string.Join(", ", users.Select(i => i + 1)), r =>
+            {
+                foreach (ListViewItem item in r.Users.Items) item.Checked = false;
+                foreach (var i in users) r.Users.Items[i].Checked = true;
+            });
+        }
+
+        private static Scenario CountsRead(this Scenario scenario, string counts)
+        {
+            return scenario.WaitFor("the rows to read " + counts, r => Counts(r) == counts, 10000);
+        }
+
+        private static Scenario EachRowCountsItsOwnChanges()
+        {
+            var currency = Guid.NewGuid();
+            return new Scenario
+                {
+                    Name = "each-row-counts-its-own-changes",
+                    Why = "feat/per-user-update-count: a ticked row counts what differs from that user's stored settings",
+                    Org = () =>
+                    {
+                        var org = FakeOrg.Sample("Org A", 3);
+                        org.Settings[UserId(1)]["timezonecode"] = 85;
+                        org.Currencies.Add(new Entity("transactioncurrency", currency) { ["currencyname"] = "Dollar" });
+                        foreach (var row in org.Settings.Values)
+                            row["transactioncurrencyid"] = new EntityReference("transactioncurrency", currency);
+                        return org;
+                    }
+                }
+                .Loaded(3)
+                .Tick(0, 1)
+                .CountsRead("[0],[0],[]")
+                .Do("set the time zone user 2 already has", r =>
+                {
+                    var zones = r.Find<ComboBox>("cbbTimeZones");
+                    zones.SelectedIndex = zones.Items.Count - 1;
+                })
+                .CountsRead("[1],[0],[]")
+                .Do("pick a paging limit of 100", r => r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100")
+                .CountsRead("[2],[1],[]")
+                .Do("pick the choice and the lookup everyone already has", r =>
+                {
+                    r.Find<ComboBox>("cbbTrackMessages").SelectedIndex = 2;
+                    r.Find<ComboBox>("cbbCurrencies").SelectedIndex = 1;
+                    r.Check(r.Find<ToolStripButton>("tsbUpdateUserSettings").Text.Contains("(4 changed)"),
+                        "the button reads " + r.Find<ToolStripButton>("tsbUpdateUserSettings").Text);
+                })
+                .CountsRead("[2],[1],[]")
+                .Tick(1, 2)
+                .CountsRead("[],[1],[2]")
+                .Do("press Reset", r => r.Find<ToolStripButton>("tsbReset").PerformClick())
+                .CountsRead("[],[0],[0]");
+        }
+
+        private static Scenario CountsFallAfterUpdate()
+        {
+            return new Scenario
+                {
+                    Name = "counts-fall-after-update",
+                    Why = "feat/per-user-update-count: the stored settings are read again after Update, not as a user it impersonated",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Do("pick a paging limit of 100", r => r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100")
+                .Tick(0, 1)
+                .CountsRead("[1],[1],[]")
+                .Update(0, 1)
+                .Finished()
+                .CountsRead("[0],[0],[]")
+                .Do("ask the org who read them", r =>
+                {
+                    var reads = r.Fake.Calls.Where(c => c.What.StartsWith("Bulk read")).ToList();
+                    r.Check(reads.Count == 1, reads.Count + " bulk reads followed the update, not 1");
+                    r.Check(reads.All(c => c.CallerId == Guid.Empty), "the read ran as " + reads.FirstOrDefault()?.CallerId);
+                    r.Check(reads.All(c => c.ThreadId != r.UiThreadId), "the read ran on the UI thread");
+                });
+        }
+
+        private static Scenario FilterIgnoresTheCounts()
+        {
+            return new Scenario
+                {
+                    Name = "filter-ignores-the-counts",
+                    Why = "feat/per-user-update-count: typing 1 finds user 01, not every row with a count of 1",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Do("pick a paging limit of 100", r => r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100")
+                .Tick(0, 1, 2)
+                .CountsRead("[1],[1],[1]")
+                .Do("type 1 in the filter", r => r.Find<TextBox>("txtFilter").Text = "1")
+                .Pause("let the filter run", 500)
+                .Do("count the rows", r => r.Check(r.Users.Items.Count == 1, r.Users.Items.Count + " rows match, not 1"));
+        }
+
+        private static Scenario CountWaitsForTheRead()
+        {
+            return new Scenario
+                {
+                    Name = "count-waits-for-the-read",
+                    Why = "feat/per-user-update-count: a row says nothing about settings that have not arrived",
+                    Org = () =>
+                    {
+                        var org = FakeOrg.Sample("Org A", 3);
+                        org.BulkSettingsLatencyMs.Enqueue(3000);
+                        return org;
+                    }
+                }
+                .Loaded(3)
+                .Do("pick a paging limit of 100", r => r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100")
+                .Tick(0)
+                .Do("look at the row before the answer", r =>
+                    r.Check(Counts(r) == "[...],[],[]", "with no answer yet the rows read " + Counts(r)))
+                .CountsRead("[1],[],[]");
+        }
+
+        private static Scenario OlderReadCannotOverwriteCounts()
+        {
+            return new Scenario
+                {
+                    Name = "older-read-cannot-overwrite-counts",
+                    Why = "feat/per-user-update-count: a slow read from before Update lands after the read that followed it",
+                    Org = () =>
+                    {
+                        var org = FakeOrg.Sample("Org A", 3);
+                        org.BulkSettingsLatencyMs.Enqueue(6000);
+                        return org;
+                    }
+                }
+                .Loaded(3)
+                .Do("pick a paging limit of 100", r => r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100")
+                .Update(0)
+                .Finished()
+                .CountsRead("[0],[],[]")
+                .Pause("let the older read land", 6500)
+                .Do("look at the row again", r => r.Check(Counts(r) == "[0],[],[]", "the old answer won: " + Counts(r)));
+        }
+
+        private static Scenario FailedReadIsNotACount()
+        {
+            return new Scenario
+                {
+                    Name = "failed-read-is-not-a-count",
+                    Why = "feat/per-user-update-count: a read that failed leaves a question mark, not a number",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Do("pick a paging limit of 100", r => r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100")
+                .Tick(0)
+                .CountsRead("[1],[],[]")
+                .Do("lose the connection and press Update", r =>
+                {
+                    r.Fake.Down = true;
+                    r.Find<ToolStripButton>("tsbUpdateUserSettings").PerformClick();
+                })
+                .WaitFor("the update to finish", r => r.Dialogs.Any(d => d.Contains("Do you want to open log file?")), 30000)
+                .CountsRead("[?],[],[]");
+        }
+
+        private static Scenario CountsCoverEveryBatch()
+        {
+            long tickMs = 0;
+            return new Scenario
+                {
+                    Name = "counts-cover-every-batch",
+                    Why = "feat/per-user-update-count: 1200 users are read 500 at a time, and ticking them all stays quick",
+                    Org = () => FakeOrg.Sample("Org A", 1200)
+                }
+                .Loaded(1200)
+                .Do("pick a paging limit of 100", r => r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100")
+                .Do("tick everyone", r =>
+                {
+                    var clock = Stopwatch.StartNew();
+                    var selector = Ui.Field<object>(r.Control, "userSelector1");
+                    selector.GetType().GetMethod("llCheckAll_LinkClicked", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                        .Invoke(selector, new object[] { null, null });
+                    tickMs = clock.ElapsedMilliseconds;
+                    Console.WriteLine("    Check all took " + tickMs + "ms for " + r.Users.Items.Count + " users");
+                })
+                .WaitFor("every row to read 1", r => r.Users.Items.Cast<ListViewItem>().All(i => i.SubItems[3].Text == "1"), 10000)
+                .Do("count the reads", r =>
+                {
+                    var reads = r.Fake.Calls.Count(c => c.What.StartsWith("Bulk read"));
+                    r.Check(reads == 3, reads + " reads for 1200 users, not 3");
+                    r.Check(tickMs < 3000, "ticking held the window for " + tickMs + "ms");
                 });
         }
 
