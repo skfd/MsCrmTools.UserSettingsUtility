@@ -2,6 +2,7 @@
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Query;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
 using System.Xml.XPath;
@@ -10,6 +11,8 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
 {
     internal class QueryHelper
     {
+        private const int UsersPerSettingsQuery = 500;
+
         public static EntityCollection GetItems(string fetchXml, IOrganizationService service)
         {
             // Check if businessunitid attribute is contained in attriburtes
@@ -50,6 +53,30 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
             } while (result.MoreRecords);
 
             return ec;
+        }
+
+        public static Dictionary<Guid, Entity> GetUserSettings(List<Guid> userIds, IOrganizationService service)
+        {
+            var settings = new Dictionary<Guid, Entity>();
+            for (var i = 0; i < userIds.Count; i += UsersPerSettingsQuery)
+            {
+                var ids = userIds.Skip(i).Take(UsersPerSettingsQuery).Cast<object>().ToArray();
+
+                // Every column, as a clicked user's read does: an older org lacks some of the
+                // settings this tool knows, and naming one it lacks would fail the whole query
+                var result = service.RetrieveMultiple(new QueryExpression("usersettings")
+                {
+                    ColumnSet = new ColumnSet(true),
+                    Criteria = { Conditions = { new ConditionExpression("systemuserid", ConditionOperator.In, ids) } }
+                });
+
+                foreach (var row in result.Entities)
+                {
+                    settings[row.Id] = row;
+                }
+            }
+
+            return settings;
         }
 
         private static void AddMissingCrmAttribute(XDocument xDoc, string attributeName)

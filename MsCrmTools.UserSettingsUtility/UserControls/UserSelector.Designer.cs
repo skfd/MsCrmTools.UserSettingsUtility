@@ -45,6 +45,7 @@
             this.chLastName = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
             this.chFirstName = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
             this.chBusinessUnit = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
+            this.chUpdateCount = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
             this.panel1.SuspendLayout();
             this.panel2.SuspendLayout();
             this.panel3.SuspendLayout();
@@ -174,7 +175,8 @@
             this.lvUsers.Columns.AddRange(new System.Windows.Forms.ColumnHeader[] {
             this.chLastName,
             this.chFirstName,
-            this.chBusinessUnit});
+            this.chBusinessUnit,
+            this.chUpdateCount});
             this.lvUsers.Dock = System.Windows.Forms.DockStyle.Fill;
             this.lvUsers.FullRowSelect = true;
             this.lvUsers.HideSelection = false;
@@ -188,6 +190,7 @@
             this.lvUsers.UseCompatibleStateImageBehavior = false;
             this.lvUsers.View = System.Windows.Forms.View.Details;
             this.lvUsers.ColumnClick += new System.Windows.Forms.ColumnClickEventHandler(this.lvUsers_ColumnClick);
+            this.lvUsers.ItemChecked += new System.Windows.Forms.ItemCheckedEventHandler(this.lvUsers_ItemChecked);
             this.lvUsers.ItemSelectionChanged += new System.Windows.Forms.ListViewItemSelectionChangedEventHandler(this.lvUsers_ItemSelectionChanged);
             // 
             // chLastName
@@ -204,6 +207,12 @@
             // 
             this.chBusinessUnit.Text = "Business unit";
             this.chBusinessUnit.Width = 150;
+            //
+            // chUpdateCount
+            //
+            this.chUpdateCount.Text = "To update";
+            this.chUpdateCount.TextAlign = System.Windows.Forms.HorizontalAlignment.Right;
+            this.chUpdateCount.Width = 70;
             // 
             // UserSelector
             // 
@@ -243,5 +252,6 @@
         private System.Windows.Forms.ColumnHeader chLastName;
         private System.Windows.Forms.ColumnHeader chFirstName;
         private System.Windows.Forms.ColumnHeader chBusinessUnit;
+        private System.Windows.Forms.ColumnHeader chUpdateCount;
     }
 }

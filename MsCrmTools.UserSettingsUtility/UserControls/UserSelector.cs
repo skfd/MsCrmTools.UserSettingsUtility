@@ -12,12 +12,17 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
 {
     public partial class UserSelector : UserControl
     {
+        private const int UPDATE_COUNT_COLUMN = 3;
         private int currentColumnOrder;
         private List<ListViewItem> items = new List<ListViewItem>();
+        private Entity pendingUpdate = new Entity();
         private Thread searchThread;
         private readonly System.Windows.Forms.Timer selectionTimer = new System.Windows.Forms.Timer { Interval = 250 };
         private IOrganizationService service;
         private int settingsRequest;
+        private Dictionary<Guid, Entity> storedSettings;
+        private bool storedSettingsFailed;
+        private int storedSettingsRequest;
 
         public UserSelector()
         {
@@ -55,12 +60,15 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
             cbbViews.Items.Clear();
             items.Clear();
             service = null;
+            storedSettingsRequest++;
+            storedSettings = null;
+            storedSettingsFailed = false;
         }
 
         public void FilterDisplay(object term)
         {
             var filteredItems = items.Where(i => string.IsNullOrEmpty(term.ToString()) || i.Text.ToLower().IndexOf(term.ToString().ToLower()) >= 0
-            || i.SubItems.Cast<ListViewItem.ListViewSubItem>().Any(s => s.Text.ToLower().IndexOf(term.ToString().ToLower()) >= 0));
+            || i.SubItems.Cast<ListViewItem.ListViewSubItem>().Take(UPDATE_COUNT_COLUMN).Any(s => s.Text.ToLower().IndexOf(term.ToString().ToLower()) >= 0));
 
             Invoke(new Action(() =>
             {
@@ -102,15 +110,52 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
                             SubItems =
                             {
                                 record.GetAttributeValue<string>("firstname"),
-                                record.GetAttributeValue<EntityReference>("businessunitid").Name
+                                record.GetAttributeValue<EntityReference>("businessunitid").Name,
+                                ""
                             }
                         })
                         .ToArray());
 
                     lvUsers.Items.AddRange(items.ToArray());
+                    ReadStoredSettings();
                 }
             };
             bw.RunWorkerAsync(fetchXml);
+        }
+
+        public void ReadStoredSettings()
+        {
+            if (IsDisposed) return;
+
+            // Stale-result guard: this read replaces any still on the wire, whose answer would
+            // otherwise be believed if it landed last
+            var request = ++storedSettingsRequest;
+            var currentService = service;
+            var userIds = items.Select(i => ((Entity)i.Tag).Id).ToList();
+
+            storedSettings = null;
+            storedSettingsFailed = false;
+            ShowUpdateCounts();
+
+            if (currentService == null) return;
+
+            var bw = new BackgroundWorker();
+            bw.DoWork += (s, args) => { args.Result = QueryHelper.GetUserSettings(userIds, currentService); };
+            bw.RunWorkerCompleted += (s, args) =>
+            {
+                if (request != storedSettingsRequest || IsDisposed) return;
+
+                storedSettingsFailed = args.Error != null;
+                storedSettings = args.Error == null ? (Dictionary<Guid, Entity>)args.Result : null;
+                ShowUpdateCounts();
+            };
+            bw.RunWorkerAsync();
+        }
+
+        public void ShowPendingUpdate(Entity update)
+        {
+            pendingUpdate = update;
+            ShowUpdateCounts();
         }
 
         public void SetViews(List<ViewItem> scViews)
@@ -167,6 +212,11 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
             }
         }
 
+        private void lvUsers_ItemChecked(object sender, ItemCheckedEventArgs e)
+        {
+            ShowUpdateCount(e.Item);
+        }
+
         private void lvUsers_ItemSelectionChanged(object sender, ListViewItemSelectionChangedEventArgs e)
         {
             // Raised for every row a click selects or deselects, so a shift-click across
@@ -220,6 +270,37 @@ namespace MsCrmTools.UserSettingsUtility.UserControls
                 ((MainControl)this.Parent.Parent.Parent).LoadCurrentUserSetting(settings);
             };
             bw.RunWorkerAsync();
+        }
+
+        private void ShowUpdateCount(ListViewItem item)
+        {
+            var text = UpdateCountOf(item);
+            if (item.SubItems[UPDATE_COUNT_COLUMN].Text != text)
+            {
+                item.SubItems[UPDATE_COUNT_COLUMN].Text = text;
+            }
+        }
+
+        private void ShowUpdateCounts()
+        {
+            lvUsers.BeginUpdate();
+            items.ForEach(ShowUpdateCount);
+            lvUsers.EndUpdate();
+        }
+
+        private string UpdateCountOf(ListViewItem item)
+        {
+            // Update leaves an unticked user alone, so a number there would be untrue
+            if (!item.Checked) return "";
+            if (storedSettingsFailed) return "?";
+            if (storedSettings == null) return "...";
+
+            // Without a stored row there is nothing to compare, and Update skips that user too
+            if (!storedSettings.TryGetValue(((Entity)item.Tag).Id, out var stored)) return "?";
+
+            return pendingUpdate.Attributes
+                .Count(a => !Equals(a.Value, stored.GetAttributeValue<object>(a.Key)))
+                .ToString();
         }
 
         private void txtFilter_TextChanged(object sender, EventArgs e)

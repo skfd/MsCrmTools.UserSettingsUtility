@@ -572,6 +572,8 @@ namespace MsCrmTools.UserSettingsUtility
             tsbUpdateUserSettings.ToolTipText = changed.Count == 0
                 ? UPDATE_BUTTON_TEXT
                 : "Will update: " + string.Join(", ", changed.Select(t => t.Label.Text));
+
+            userSelector1.ShowPendingUpdate(BuildChangedSetting());
         }
 
         private static void SelectItemOrNoChange(ComboBox comboBox, string value)
@@ -646,15 +648,8 @@ namespace MsCrmTools.UserSettingsUtility
             RememberLoadedValues();
         }
 
-        private void tsbUpdateUserSettings_Click(object sender, EventArgs e)
+        private Entity BuildChangedSetting()
         {
-            if (userSelector1.SelectedItems.Count == 0)
-            {
-                MessageBox.Show(this, "No user has been selected!", "Warning", MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-                return;
-            }
-
             #region Initialisation des données à mettre à jour
 
             var setting = new Entity()
@@ -688,42 +683,32 @@ namespace MsCrmTools.UserSettingsUtility
                     cbbSynchronizeResourceBookingWithOutlook.SelectedIndex == 2;
             }
 
-            if (cbbPagingLimit.SelectedIndex != 0)
+            // This runs on every change to the form, and a list being refilled has nothing selected
+            if (cbbPagingLimit.SelectedIndex > 0)
             {
                 setting[UserSettings.PagingLimit] = int.Parse(cbbPagingLimit.SelectedItem.ToString());
             }
 
-            if (cbbTimeZones.SelectedIndex != 0)
+            if (cbbTimeZones.SelectedIndex > 0)
             {
                 setting[UserSettings.TimeZoneCode] = ((AppCode.TimeZone)cbbTimeZones.SelectedItem).Code;
             }
 
             // Both lists can be typed into, so read the text rather than the selected item
-            var workStartTime = cbbWorkStartTime.Text.Trim();
-            var workStopTime = cbbWorkStopTime.Text.Trim();
-            foreach (var time in new[] { cbbWorkStartTime, cbbWorkStopTime }.Where(IsChanged).Select(c => c.Text.Trim()))
-            {
-                if (!DateTime.TryParseExact(time, new[] { "H:mm", "HH:mm" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
-                {
-                    MessageBox.Show(this, $"\"{time}\" is not a valid work time. Use the format HH:mm, for example 08:30.", "Warning", MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-                    return;
-                }
-            }
-            setting[UserSettings.WorkdayStartTime] = workStartTime;
-            setting[UserSettings.WorkdayStopTime] = workStopTime;
+            setting[UserSettings.WorkdayStartTime] = cbbWorkStartTime.Text.Trim();
+            setting[UserSettings.WorkdayStopTime] = cbbWorkStopTime.Text.Trim();
 
-            if (cbbHelpLanguage.SelectedIndex != 0)
+            if (cbbHelpLanguage.SelectedIndex > 0)
             {
                 setting[UserSettings.HelpLanguageId] = ((Language)cbbHelpLanguage.SelectedItem).Lcid;
             }
 
-            if (cbbUiLanguage.SelectedIndex != 0)
+            if (cbbUiLanguage.SelectedIndex > 0)
             {
                 setting[UserSettings.UILanguageId] = ((Language)cbbUiLanguage.SelectedItem).Lcid;
             }
 
-            if (cbbCurrencies.SelectedIndex != 0)
+            if (cbbCurrencies.SelectedIndex > 0)
             {
                 setting[UserSettings.TransactionCurrencyId] = (EntityReference)cbbCurrencies.SelectedItem;
             }
@@ -752,12 +737,12 @@ namespace MsCrmTools.UserSettingsUtility
             {
                 setting[UserSettings.UseCrmFormForTask] = cbbUseCrmFormTask.SelectedIndex == 2;
             }
-            if (cbbDefaultDashboard.SelectedIndex != 0)
+            if (cbbDefaultDashboard.SelectedIndex > 0)
             {
                 var dashboard = (EntityReference)cbbDefaultDashboard.SelectedItem;
                 setting[UserSettings.DefaultDashboardId] = dashboard.Id;
             }
-            if (cbbFormat.SelectedIndex != 0)
+            if (cbbFormat.SelectedIndex > 0)
             {
                 setting[UserSettings.LocaleId] = ((CultureInfo)cbbFormat.SelectedItem).LCID;
             }
@@ -781,6 +766,29 @@ namespace MsCrmTools.UserSettingsUtility
                 setting.Attributes.Remove(tracked.Attribute);
             }
 
+            return setting;
+        }
+
+        private void tsbUpdateUserSettings_Click(object sender, EventArgs e)
+        {
+            if (userSelector1.SelectedItems.Count == 0)
+            {
+                MessageBox.Show(this, "No user has been selected!", "Warning", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            foreach (var time in new[] { cbbWorkStartTime, cbbWorkStopTime }.Where(IsChanged).Select(c => c.Text.Trim()))
+            {
+                if (!DateTime.TryParseExact(time, new[] { "H:mm", "HH:mm" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                {
+                    MessageBox.Show(this, $"\"{time}\" is not a valid work time. Use the format HH:mm, for example 08:30.", "Warning", MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+
+            var setting = BuildChangedSetting();
             if (setting.Attributes.Count == 0)
             {
                 MessageBox.Show(this, "No setting has been changed!", "Warning", MessageBoxButtons.OK,
@@ -829,6 +837,10 @@ namespace MsCrmTools.UserSettingsUtility
                 },
                 PostWorkCallBack = evt =>
                 {
+                    // Also replaces a read that ran during the update, while Service was
+                    // impersonating one of the users
+                    userSelector1.ReadStoredSettings();
+
                     if (evt.Error != null)
                     {
                         // Don't show as message if the user has just cancelled the operation
