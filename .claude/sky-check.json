@@ -1,0 +1,4 @@
+{
+  "command": "dotnet build MsCrmTools.UserSettingsUtility.sln -v q -nologo",
+  "timeoutSeconds": 120
+}
