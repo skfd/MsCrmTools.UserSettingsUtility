@@ -23,11 +23,10 @@ namespace UserSettings.Harness
     /// and nothing else. A request it does not know is a finding, not a gap to paper over: it
     /// throws, and the scenario hears about it.
     ///
-    /// CallerId is here because the tool impersonates a user, by reflecting on a property of that
-    /// name the way CrmServiceClient exposes it, when the org refuses to let the signed-in user
-    /// write that user's settings. Every call records who it was made as and on which thread,
-    /// which is what the scenarios assert on. Empty is the signed-in user, and a user's settings
-    /// row has the user's id.
+    /// CallerId is here because the tool impersonates each user it updates by reflecting on a
+    /// property of that name, the way CrmServiceClient exposes it. Every call records who it was
+    /// made as and on which thread, which is what the scenarios assert on. Empty is the signed-in
+    /// user, and a user's settings row has the user's id.
     /// </summary>
     public class FakeOrg : IOrganizationService
     {
@@ -41,10 +40,16 @@ namespace UserSettings.Harness
         public bool Down;
 
         /// <summary>
-        /// Lets each user write only their own settings, the way an org does when the signed-in
-        /// user has no write access to other users' settings.
+        /// Users the org refuses to act as, the way it refuses a disabled user, with the message a
+        /// real org gives.
         /// </summary>
-        public bool RefuseWritingOthers;
+        public readonly HashSet<Guid> Disabled = new HashSet<Guid>();
+
+        private void RefuseIfDisabled()
+        {
+            if (Disabled.Contains(CallerId))
+                throw new InvalidOperationException("The user with SystemUserId=" + CallerId + " is disabled");
+        }
 
         /// <summary>How long a usersettings read takes, so that waiting on one shows.</summary>
         public int SettingsLatencyMs;
@@ -176,6 +181,7 @@ namespace UserSettings.Harness
         public OrganizationResponse Execute(OrganizationRequest request)
         {
             if (Down) throw new InvalidOperationException(Name + " cannot be reached");
+            RefuseIfDisabled();
             Record("Execute " + request.RequestName);
 
             switch (request)
@@ -217,6 +223,7 @@ namespace UserSettings.Harness
         public EntityCollection RetrieveMultiple(QueryBase query)
         {
             if (Down) throw new InvalidOperationException(Name + " cannot be reached");
+            RefuseIfDisabled();
             switch (query)
             {
                 case FetchExpression fetch:
@@ -302,8 +309,7 @@ namespace UserSettings.Harness
             if (entity.LogicalName != "usersettings")
                 throw new NotSupportedException(Name + " does not update " + entity.LogicalName);
 
-            if (RefuseWritingOthers && CallerId != entity.Id)
-                throw new InvalidOperationException("Principal user is missing prvWriteUserSettings privilege");
+            RefuseIfDisabled();
 
             lock (Settings)
             {

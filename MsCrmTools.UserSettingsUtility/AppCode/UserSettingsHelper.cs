@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Windows.Forms;
 
 namespace MsCrmTools.UserSettingsUtility.AppCode
@@ -15,6 +16,7 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
     {
         private readonly ConnectionDetail detail;
         private readonly IOrganizationService service;
+        private Guid currentUserId;
         private Boolean ignoreDisabledUsers;
         private Boolean ignoreUserWithoutRoles;
 
@@ -90,6 +92,9 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
         {
             try
             {
+                currentUserId = GetCallerId(service);
+                // Read as the signed-in user, the way selecting a user does: an org refuses to
+                // act as a user who is disabled or has no roles
                 var records = service.RetrieveMultiple(new QueryByAttribute("usersettings")
                 {
                     Attributes = { UserSettings.Fields.SystemUserId },
@@ -225,7 +230,8 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
                     {
                         Success = true,
                         UserName = userFullName,
-                        Message = refused == null ? null : "Written as the user, because the org refused it as you: " + refused
+                        Message = refused == null ? null
+                            : "Written as you, because the org refused to act as the user: " + refused
                     });
                 }
             }
@@ -272,35 +278,45 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
                     });
                 }
             }
+            finally
+            {
+                // Reset callerid to the logged in user so later queries don't fail
+                SetCallerId(currentUserId, service);
+            }
         }
 
         /// <summary>
-        /// Writes the user's settings as the signed-in user, which an administrator may do for
-        /// anyone, disabled or without roles. Only if the org refuses does it write as the user
-        /// instead, the way the tool always used to, and that needs the user to be enabled and to
-        /// have a role. Returns why the first write was refused, or null.
+        /// Writes the settings as the user, as the tool always has, so the user shows as their
+        /// last modifier. An org refuses to act as a user who is disabled or has no roles; then
+        /// it writes them as the signed-in user, which an administrator may do for anyone. If
+        /// that fails too, the org's refusal is what gets reported. Returns that refusal when
+        /// the second write succeeded, or null.
         /// </summary>
         private string Write(Entity userSetting, Guid userId)
         {
             try
             {
+                SetCallerId(userId, service);
                 service.Update(userSetting);
                 return null;
             }
             catch (Exception refused) when (service.GetType().GetProperty("CallerId") != null)
             {
-                var signedIn = GetCallerId(service);
-                SetCallerId(userId, service);
+                SetCallerId(currentUserId, service);
                 try
                 {
                     service.Update(userSetting);
-                    return refused.Message;
                 }
-                finally
+                catch
                 {
-                    // Back to the signed-in user, so later reads don't run as this one
-                    SetCallerId(signedIn, service);
+                    ExceptionDispatchInfo.Capture(refused).Throw();
                 }
+
+                return refused.Message;
+            }
+            finally
+            {
+                SetCallerId(currentUserId, service);
             }
         }
 

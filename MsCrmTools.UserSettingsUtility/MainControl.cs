@@ -887,8 +887,8 @@ namespace MsCrmTools.UserSettingsUtility
                     SetBusy(false);
                     tsbCancelUpdate.Visible = false;
 
-                    // Also replaces a read that ran during the update, while Service may have been
-                    // impersonating a user whose settings the org refused to let us write
+                    // Also replaces a read that ran during the update, while Service was
+                    // impersonating one of the users
                     userSelector1.ReadStoredSettings();
 
                     if (evt.Error != null)
