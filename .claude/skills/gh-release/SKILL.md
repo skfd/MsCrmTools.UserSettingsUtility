@@ -19,7 +19,8 @@ ad hoc builds for local install, not versions.
   no `-dev` scheme, so skip the version steps. The build reports the same version as the store
   release, and the notes must say so.
 - **Tag `adhoc-YYYY-MM-DD`,** created with `--target <sha> --prerelease --latest=false` so it can't
-  collide with an upstream tag or show as latest.
+  collide with an upstream tag or show as latest. `<sha>` must be the full 40 characters: a short
+  one is refused as an invalid target_commitish.
 - **Test the shipped DLL:** copy it over the plugin in a copy of the harness's bin and run
   `UserSettings.Harness.exe fake <out>`. `tests/e2e.ps1` writes to a real org, so run it only when asked.
 - **Stage assets outside the repo.** `tests/` holds a sign-in token cache and real-org logs.
