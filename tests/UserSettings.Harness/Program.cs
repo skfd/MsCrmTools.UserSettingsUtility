@@ -59,6 +59,19 @@ namespace UserSettings.Harness
                 return 0;
             }
 
+            if (args.Length >= 4 && args[0] == "org-write-others")
+            {
+                var client = RealOrg.Connect(args[1], args[2], args[3]);
+                if (!client.IsReady)
+                {
+                    Console.Error.WriteLine("Could not sign in: " + client.LastCrmError);
+                    return 3;
+                }
+
+                RealOrg.ProbeWritingOthers(client);
+                return 0;
+            }
+
             if (args.Length >= 5 && args[0] == "org-time-zone")
             {
                 var client = RealOrg.Connect(args[1], args[2], args[3]);

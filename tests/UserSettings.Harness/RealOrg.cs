@@ -62,6 +62,97 @@ namespace UserSettings.Harness
             Console.WriteLine("fetch for a null tab finds " + nullTabs.GetAttributeValue<AliasedValue>("rows").Value);
         }
 
+        /// <summary>
+        /// Whether the org lets the signed-in user write other users' settings without
+        /// impersonating them, and what impersonating them does instead. For one other enabled
+        /// user with roles, one disabled user and one enabled user without roles, where the org
+        /// has them, it writes a paging limit as the signed-in user and then as the user, putting
+        /// the original back after each. Prints ids and outcomes, no names.
+        /// </summary>
+        public static void ProbeWritingOthers(CrmServiceClient client)
+        {
+            client.CallerId = Guid.Empty;
+            var me = ((WhoAmIResponse)client.Execute(new WhoAmIRequest())).UserId;
+
+            var users = client.RetrieveMultiple(new FetchExpression(
+                "<fetch><entity name='systemuser'><attribute name='systemuserid' /><attribute name='isdisabled' />"
+                + "<attribute name='accessmode' />"
+                + "<link-entity name='systemuserroles' from='systemuserid' to='systemuserid' link-type='outer' alias='r'>"
+                + "<attribute name='roleid' /></link-entity></entity></fetch>")).Entities
+                .GroupBy(u => u.Id)
+                .Select(g => new
+                {
+                    Id = g.Key,
+                    Disabled = g.First().GetAttributeValue<bool>("isdisabled"),
+                    Access = g.First().GetAttributeValue<OptionSetValue>("accessmode")?.Value ?? -1,
+                    Roles = g.Count(u => u.Contains("r.roleid"))
+                })
+                .Where(u => u.Id != me)
+                .ToList();
+
+            Console.WriteLine(users.Count + " other users: " + string.Join(", ", users
+                .GroupBy(u => (u.Disabled ? "disabled" : "enabled") + " access " + u.Access + (u.Roles > 0 ? " with roles" : " no roles"))
+                .Select(g => g.Count() + " " + g.Key)));
+
+            var picks = new[]
+            {
+                new { Kind = "enabled with roles", User = users.FirstOrDefault(u => !u.Disabled && u.Access == 0 && u.Roles > 0) },
+                new { Kind = "disabled", User = users.FirstOrDefault(u => u.Disabled) },
+                new { Kind = "enabled without roles", User = users.FirstOrDefault(u => !u.Disabled && u.Roles == 0) }
+            };
+
+            foreach (var pick in picks)
+            {
+                if (pick.User == null)
+                {
+                    Console.WriteLine("  " + pick.Kind + ": none in this org");
+                    continue;
+                }
+
+                Entity before;
+                try
+                {
+                    before = ReadSettings(client, pick.User.Id);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("  " + pick.Kind + " " + pick.User.Id + ": cannot read the settings row: " + e.Message);
+                    continue;
+                }
+
+                foreach (var impersonate in new[] { false, true })
+                {
+                    var was = before.GetAttributeValue<int>("paginglimit");
+                    var write = new Entity("usersettings", before.Id) { ["paginglimit"] = was == 75 ? 100 : 75 };
+                    string outcome;
+                    try
+                    {
+                        client.CallerId = impersonate ? pick.User.Id : Guid.Empty;
+                        client.Update(write);
+                        client.CallerId = Guid.Empty;
+                        var after = ReadSettings(client, pick.User.Id);
+                        outcome = "wrote " + after.GetAttributeValue<int>("paginglimit")
+                                  + ", modifiedby " + (after.GetAttributeValue<EntityReference>("modifiedby")?.Id == me ? "me" : "the user")
+                                  + ", on behalf of " + (after.GetAttributeValue<EntityReference>("modifiedonbehalfby") == null ? "nobody"
+                                      : after.GetAttributeValue<EntityReference>("modifiedonbehalfby").Id == me ? "me" : "someone else");
+                        client.Update(new Entity("usersettings", before.Id) { ["paginglimit"] = was });
+                        outcome += ReadSettings(client, pick.User.Id).GetAttributeValue<int>("paginglimit") == was
+                            ? "; put back" : "; NOT PUT BACK";
+                    }
+                    catch (Exception e)
+                    {
+                        outcome = "refused: " + e.Message;
+                    }
+                    finally
+                    {
+                        client.CallerId = Guid.Empty;
+                    }
+
+                    Console.WriteLine("  " + pick.Kind + " " + pick.User.Id + (impersonate ? ", impersonated: " : ", as me: ") + outcome);
+                }
+            }
+        }
+
         private static Entity ReadSettings(IOrganizationService service, Guid userId)
         {
             return service.RetrieveMultiple(new QueryByAttribute("usersettings")
