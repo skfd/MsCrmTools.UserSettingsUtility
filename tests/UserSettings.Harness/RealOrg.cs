@@ -74,13 +74,31 @@ namespace UserSettings.Harness
             client.CallerId = Guid.Empty;
             var me = ((WhoAmIResponse)client.Execute(new WhoAmIRequest())).UserId;
 
+            // An org refuses to act as a user who does not exist, so an answer here means the
+            // connection never sent CallerId at all
+            try
+            {
+                client.CallerId = Guid.NewGuid();
+                var seen = ((WhoAmIResponse)client.Execute(new WhoAmIRequest())).UserId;
+                Console.WriteLine("WhoAmI impersonating a made-up user: " + (seen == me ? "me" : seen.ToString())
+                                  + " (client.CallerId reads " + client.CallerId + ")");
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("WhoAmI impersonating a made-up user refused: " + e.Message);
+            }
+            finally
+            {
+                client.CallerId = Guid.Empty;
+            }
+
             var users = client.RetrieveMultiple(new FetchExpression(
                 "<fetch><entity name='systemuser'><attribute name='systemuserid' /><attribute name='isdisabled' />"
                 + "<attribute name='accessmode' />"
                 + "<link-entity name='systemuserroles' from='systemuserid' to='systemuserid' link-type='outer' alias='r'>"
                 + "<attribute name='roleid' /></link-entity></entity></fetch>")).Entities
                 .GroupBy(u => u.Id)
-                .Select(g => new
+                .Select(g => new ProbedUser
                 {
                     Id = g.Key,
                     Disabled = g.First().GetAttributeValue<bool>("isdisabled"),
@@ -94,30 +112,47 @@ namespace UserSettings.Harness
                 .GroupBy(u => (u.Disabled ? "disabled" : "enabled") + " access " + u.Access + (u.Roles > 0 ? " with roles" : " no roles"))
                 .Select(g => g.Count() + " " + g.Key)));
 
+            // Interactive users first; the org may have none but its owner. Only users with a
+            // settings row can be written, and not every user has one.
+            var withRows = new HashSet<Guid>(client.RetrieveMultiple(new QueryExpression("usersettings")
+            {
+                ColumnSet = new ColumnSet("systemuserid")
+            }).Entities.Select(s => s.GetAttributeValue<Guid>("systemuserid")));
+            Func<Func<ProbedUser, bool>, ProbedUser> first = match => users.Where(u => withRows.Contains(u.Id))
+                .OrderBy(u => u.Access == 0 ? 0 : 1).FirstOrDefault(u => match(u));
+
             var picks = new[]
             {
-                new { Kind = "enabled with roles", User = users.FirstOrDefault(u => !u.Disabled && u.Access == 0 && u.Roles > 0) },
-                new { Kind = "disabled", User = users.FirstOrDefault(u => u.Disabled) },
-                new { Kind = "enabled without roles", User = users.FirstOrDefault(u => !u.Disabled && u.Roles == 0) }
+                new { Kind = "enabled with roles", User = first(u => !u.Disabled && u.Roles > 0 && u.Access != 3) },
+                new { Kind = "disabled", User = first(u => u.Disabled) },
+                new { Kind = "enabled without roles", User = first(u => !u.Disabled && u.Roles == 0) }
             };
 
             foreach (var pick in picks)
             {
                 if (pick.User == null)
                 {
-                    Console.WriteLine("  " + pick.Kind + ": none in this org");
+                    Console.WriteLine("  " + pick.Kind + ": none with a settings row in this org");
                     continue;
                 }
 
-                Entity before;
+                var id = pick.User.Id;
+                Console.WriteLine("  " + pick.Kind + " " + id + ", access " + pick.User.Access + ", roles " + pick.User.Roles);
+                var before = ReadSettings(client, id);
+
                 try
                 {
-                    before = ReadSettings(client, pick.User.Id);
+                    client.CallerId = id;
+                    var seen = ((WhoAmIResponse)client.Execute(new WhoAmIRequest())).UserId;
+                    Console.WriteLine("    WhoAmI impersonating: " + (seen == id ? "the user" : seen == me ? "me" : seen.ToString()));
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine("  " + pick.Kind + " " + pick.User.Id + ": cannot read the settings row: " + e.Message);
-                    continue;
+                    Console.WriteLine("    WhoAmI impersonating refused: " + e.Message);
+                }
+                finally
+                {
+                    client.CallerId = Guid.Empty;
                 }
 
                 foreach (var impersonate in new[] { false, true })
@@ -127,16 +162,19 @@ namespace UserSettings.Harness
                     string outcome;
                     try
                     {
-                        client.CallerId = impersonate ? pick.User.Id : Guid.Empty;
+                        client.CallerId = impersonate ? id : Guid.Empty;
                         client.Update(write);
                         client.CallerId = Guid.Empty;
-                        var after = ReadSettings(client, pick.User.Id);
+                        var after = ReadSettings(client, id);
+                        Func<string, string> who = attribute =>
+                        {
+                            var by = after.GetAttributeValue<EntityReference>(attribute)?.Id;
+                            return by == null ? "nobody" : by == me ? "me" : by == id ? "the user" : by.ToString();
+                        };
                         outcome = "wrote " + after.GetAttributeValue<int>("paginglimit")
-                                  + ", modifiedby " + (after.GetAttributeValue<EntityReference>("modifiedby")?.Id == me ? "me" : "the user")
-                                  + ", on behalf of " + (after.GetAttributeValue<EntityReference>("modifiedonbehalfby") == null ? "nobody"
-                                      : after.GetAttributeValue<EntityReference>("modifiedonbehalfby").Id == me ? "me" : "someone else");
+                                  + ", modifiedby " + who("modifiedby") + ", on behalf of " + who("modifiedonbehalfby");
                         client.Update(new Entity("usersettings", before.Id) { ["paginglimit"] = was });
-                        outcome += ReadSettings(client, pick.User.Id).GetAttributeValue<int>("paginglimit") == was
+                        outcome += ReadSettings(client, id).GetAttributeValue<int>("paginglimit") == was
                             ? "; put back" : "; NOT PUT BACK";
                     }
                     catch (Exception e)
@@ -148,9 +186,17 @@ namespace UserSettings.Harness
                         client.CallerId = Guid.Empty;
                     }
 
-                    Console.WriteLine("  " + pick.Kind + " " + pick.User.Id + (impersonate ? ", impersonated: " : ", as me: ") + outcome);
+                    Console.WriteLine("    " + (impersonate ? "impersonated: " : "as me: ") + outcome);
                 }
             }
+        }
+
+        private class ProbedUser
+        {
+            public Guid Id;
+            public bool Disabled;
+            public int Access;
+            public int Roles;
         }
 
         private static Entity ReadSettings(IOrganizationService service, Guid userId)
