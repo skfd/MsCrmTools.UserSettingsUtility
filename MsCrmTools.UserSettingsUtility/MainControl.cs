@@ -858,7 +858,8 @@ namespace MsCrmTools.UserSettingsUtility
                     {
                         if (args.Success)
                         {
-                            log.LogInfo($"User {args.UserName} updated successfully");
+                            log.LogInfo($"User {args.UserName} updated successfully"
+                                        + (args.Message == null ? "" : ". " + args.Message));
                         }
                         else
                         {
@@ -886,8 +887,8 @@ namespace MsCrmTools.UserSettingsUtility
                     SetBusy(false);
                     tsbCancelUpdate.Visible = false;
 
-                    // Also replaces a read that ran during the update, while Service was
-                    // impersonating one of the users
+                    // Also replaces a read that ran during the update, while Service may have been
+                    // impersonating a user whose settings the org refused to let us write
                     userSelector1.ReadStoredSettings();
 
                     if (evt.Error != null)

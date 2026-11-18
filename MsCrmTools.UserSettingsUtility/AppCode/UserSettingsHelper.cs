@@ -15,7 +15,6 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
     {
         private readonly ConnectionDetail detail;
         private readonly IOrganizationService service;
-        private Guid currentUserId;
         private Boolean ignoreDisabledUsers;
         private Boolean ignoreUserWithoutRoles;
 
@@ -91,8 +90,6 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
         {
             try
             {
-                currentUserId = GetCallerId(service);
-                SetCallerId(userId, service);
                 var records = service.RetrieveMultiple(new QueryByAttribute("usersettings")
                 {
                     Attributes = { UserSettings.Fields.SystemUserId },
@@ -222,12 +219,13 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
 
                 if (userSetting.Attributes.Count > 1)
                 {
-                    service.Update(userSetting);
+                    var refused = Write(userSetting, userId);
 
                     OnResult?.Invoke(this, new UserUpdateEventArgs
                     {
                         Success = true,
-                        UserName = userFullName
+                        UserName = userFullName,
+                        Message = refused == null ? null : "Written as the user, because the org refused it as you: " + refused
                     });
                 }
             }
@@ -274,10 +272,35 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
                     });
                 }
             }
-            finally
+        }
+
+        /// <summary>
+        /// Writes the user's settings as the signed-in user, which an administrator may do for
+        /// anyone, disabled or without roles. Only if the org refuses does it write as the user
+        /// instead, the way the tool always used to, and that needs the user to be enabled and to
+        /// have a role. Returns why the first write was refused, or null.
+        /// </summary>
+        private string Write(Entity userSetting, Guid userId)
+        {
+            try
             {
-                // Reset callerid to the logged in user so later queries don't fail
-                SetCallerId(currentUserId, service);
+                service.Update(userSetting);
+                return null;
+            }
+            catch (Exception refused) when (service.GetType().GetProperty("CallerId") != null)
+            {
+                var signedIn = GetCallerId(service);
+                SetCallerId(userId, service);
+                try
+                {
+                    service.Update(userSetting);
+                    return refused.Message;
+                }
+                finally
+                {
+                    // Back to the signed-in user, so later reads don't run as this one
+                    SetCallerId(signedIn, service);
+                }
             }
         }
 

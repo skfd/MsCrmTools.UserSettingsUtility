@@ -24,7 +24,8 @@ namespace UserSettings.Harness
                 MistypedWorkTimeIsRefused(),
                 UserWithoutHomePage(),
                 ShiftSelectLoadsOnce(),
-                UpdateImpersonatesEachUser(),
+                UpdateWritesAsSignedInUser(),
+                RefusedWriteImpersonatesTheUser(),
                 TimeZoneForTwoUsers("time-zone-plain", "nothing missing", true),
                 TimeZoneForTwoUsers("time-zone-no-tab", "both users have an area but no tab", true,
                     org => { Forget(org, 0, "homepagesubarea"); Forget(org, 1, "homepagesubarea"); }),
@@ -689,7 +690,8 @@ namespace UserSettings.Harness
                 {
                     var writes = Updates(r);
                     r.Check(writes.Count == 5, writes.Count + " writes, not 5");
-                    r.Check(writes.All(w => w.CallerId == w.Written.Id), "a write ran as another user");
+                    r.Check(writes.All(w => w.CallerId == Guid.Empty || w.CallerId == w.Written.Id),
+                        "a write ran as another user");
                     CheckOwnConnection(r);
                 });
         }
@@ -944,12 +946,12 @@ namespace UserSettings.Harness
                 });
         }
 
-        private static Scenario UpdateImpersonatesEachUser()
+        private static Scenario UpdateWritesAsSignedInUser()
         {
             return new Scenario
                 {
-                    Name = "update-impersonates-each-user",
-                    Why = "baseline: Update writes only what was chosen, as each ticked user",
+                    Name = "update-writes-as-signed-in-user",
+                    Why = "fix/no-impersonation: Update writes only what was chosen, as the signed-in user, impersonating nobody",
                     Org = () => FakeOrg.Sample("Org A", 5)
                 }
                 .Loaded(5)
@@ -963,12 +965,51 @@ namespace UserSettings.Harness
                         + string.Join(" | ", r.Fake.Calls.Select(c => c.What)));
                     foreach (var update in updates)
                     {
-                        r.Check(update.CallerId == update.Written.Id,
+                        r.Check(update.CallerId == Guid.Empty,
                             "usersettings " + update.Written.Id + " was written as " + update.CallerId);
                         var keys = update.Written.Attributes.Keys.Where(k => k != "usersettingsid").OrderBy(k => k).ToArray();
                         r.Check(keys.SequenceEqual(new[] { "paginglimit" }),
                             "an update wrote more than the paging limit: " + string.Join(", ", keys));
                     }
+                    r.Check(r.Fake.Calls.All(c => c.CallerId == Guid.Empty), "a request ran impersonating a user");
+                });
+        }
+
+        private static Scenario RefusedWriteImpersonatesTheUser()
+        {
+            return new Scenario
+                {
+                    Name = "refused-write-impersonates-the-user",
+                    Why = "fix/no-impersonation: an org that lets users write only their own settings still gets written, as each user",
+                    Org = () =>
+                    {
+                        var org = FakeOrg.Sample("Org A", 5);
+                        org.RefuseWritingOthers = true;
+                        return org;
+                    }
+                }
+                .Loaded(5)
+                .Do("pick a paging limit of 100", r => r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100")
+                .Update(1, 2)
+                .Finished()
+                .Do("ask the org what was written", r =>
+                {
+                    var updates = Updates(r);
+                    var users = updates.Select(u => u.Written.Id).Distinct().ToList();
+                    r.Check(users.Count == 2, users.Count + " users' settings were written, not 2");
+                    foreach (var user in users)
+                    {
+                        var callers = updates.Where(u => u.Written.Id == user).Select(u => u.CallerId).ToArray();
+                        r.Check(callers.SequenceEqual(new[] { Guid.Empty, user }),
+                            "usersettings " + user + " was written as " + string.Join(", ", callers)
+                            + ", not as me and then as the user");
+                        r.Check(r.Fake.Settings[user].GetAttributeValue<int>("paginglimit") == 100,
+                            "user " + user + "'s paging limit was not written");
+                    }
+                    r.Check(!r.Dialogs.Any(d => d.StartsWith("Error")), "the tool reported an error: "
+                        + string.Join(" | ", r.Dialogs.Where(d => d.StartsWith("Error"))));
+                    r.Check(r.Fake.Calls.Where(c => !c.What.StartsWith("Update")).All(c => c.CallerId == Guid.Empty),
+                        "a read ran impersonating a user");
                     r.Check(r.Fake.CallerId == Guid.Empty, "the service was left impersonating " + r.Fake.CallerId);
                 });
         }
