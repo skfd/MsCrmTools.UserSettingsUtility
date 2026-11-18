@@ -669,7 +669,8 @@ namespace MsCrmTools.UserSettingsUtility
                     {
                         if (args.Success)
                         {
-                            log.LogInfo($"User {args.UserName} updated successfully");
+                            log.LogInfo($"User {args.UserName} updated successfully"
+                                        + (args.Message == null ? "" : ". " + args.Message));
                         }
                         else
                         {

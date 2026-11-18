@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Windows.Forms;
 
 namespace MsCrmTools.UserSettingsUtility.AppCode
@@ -92,7 +93,8 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
             try
             {
                 currentUserId = GetCallerId(service);
-                SetCallerId(userId, service);
+                // Read as the signed-in user, the way selecting a user does: an org refuses to
+                // act as a user who is disabled or has no roles
                 var records = service.RetrieveMultiple(new QueryByAttribute("usersettings")
                 {
                     Attributes = { UserSettings.Fields.SystemUserId },
@@ -220,12 +222,14 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
 
                 if (userSetting.Attributes.Count > 1)
                 {
-                    service.Update(userSetting);
+                    var refused = Write(userSetting, userId);
 
                     OnResult?.Invoke(this, new UserUpdateEventArgs
                     {
                         Success = true,
-                        UserName = userFullName
+                        UserName = userFullName,
+                        Message = refused == null ? null
+                            : "Written as you, because the org refused to act as the user: " + refused
                     });
                 }
             }
@@ -275,6 +279,41 @@ namespace MsCrmTools.UserSettingsUtility.AppCode
             finally
             {
                 // Reset callerid to the logged in user so later queries don't fail
+                SetCallerId(currentUserId, service);
+            }
+        }
+
+        /// <summary>
+        /// Writes the settings as the user, as the tool always has, so the user shows as their
+        /// last modifier. An org refuses to act as a user who is disabled or has no roles; then
+        /// it writes them as the signed-in user, which an administrator may do for anyone. If
+        /// that fails too, the org's refusal is what gets reported. Returns that refusal when
+        /// the second write succeeded, or null.
+        /// </summary>
+        private string Write(Entity userSetting, Guid userId)
+        {
+            try
+            {
+                SetCallerId(userId, service);
+                service.Update(userSetting);
+                return null;
+            }
+            catch (Exception refused) when (service.GetType().GetProperty("CallerId") != null)
+            {
+                SetCallerId(currentUserId, service);
+                try
+                {
+                    service.Update(userSetting);
+                }
+                catch
+                {
+                    ExceptionDispatchInfo.Capture(refused).Throw();
+                }
+
+                return refused.Message;
+            }
+            finally
+            {
                 SetCallerId(currentUserId, service);
             }
         }
