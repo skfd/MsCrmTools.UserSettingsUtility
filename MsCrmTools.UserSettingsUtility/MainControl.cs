@@ -21,7 +21,7 @@ namespace MsCrmTools.UserSettingsUtility
         private const string NO_CHANGE = "No change";
         private const string UPDATE_BUTTON_TEXT = "Update User(s) Settings";
         private readonly Font changedFont;
-        private readonly Dictionary<ComboBox, string> loadedValues = new Dictionary<ComboBox, string>();
+        private readonly HashSet<ComboBox> picked = new HashSet<ComboBox>();
         private List<string> areas;
         private volatile bool cancelUpdate;
         private bool loadingUserSetting;
@@ -72,8 +72,11 @@ namespace MsCrmTools.UserSettingsUtility
 
             foreach (var tracked in trackedSettings)
             {
-                tracked.ComboBox.SelectedIndexChanged += (sender, e) => ShowChangedSettings();
-                tracked.ComboBox.TextChanged += (sender, e) => ShowChangedSettings();
+                var comboBox = tracked.ComboBox;
+                comboBox.SelectedIndexChanged += (sender, e) => NotePick(comboBox);
+                comboBox.TextChanged += (sender, e) => NotePick(comboBox);
+                // Choosing the value already on show changes nothing, and is still a choice
+                comboBox.SelectionChangeCommitted += (sender, e) => NotePick(comboBox);
             }
         }
 
@@ -87,6 +90,12 @@ namespace MsCrmTools.UserSettingsUtility
 
         public void LoadCurrentUserSetting(Entity settings)
         {
+            // What has been picked is on its way to the ticked users. The clicked user's values
+            // fill in around it; over it, they would cancel the pick
+            var kept = trackedSettings.Where(t => picked.Contains(t.ComboBox))
+                .Select(t => new { t.ComboBox, Item = t.ComboBox.SelectedItem, t.ComboBox.Text })
+                .ToList();
+
             loadingUserSetting = true;
             try
             {
@@ -94,8 +103,15 @@ namespace MsCrmTools.UserSettingsUtility
             }
             finally
             {
+                // In the order above, area before tab: putting the area back refills the tabs
+                foreach (var keep in kept)
+                {
+                    if (keep.ComboBox.DropDownStyle == ComboBoxStyle.DropDown) keep.ComboBox.Text = keep.Text;
+                    else keep.ComboBox.SelectedItem = keep.Item;
+                }
+
                 loadingUserSetting = false;
-                RememberLoadedValues();
+                ShowChangedSettings();
             }
         }
 
@@ -436,7 +452,7 @@ namespace MsCrmTools.UserSettingsUtility
                             .ToArray());
                         cbbFormat.SelectedIndex = 0;
 
-                        RememberLoadedValues();
+                        ForgetPicks();
                         panel1.Enabled = true;
                     }
                 },
@@ -538,30 +554,36 @@ namespace MsCrmTools.UserSettingsUtility
             cbbSiteMapSubArea.SelectedIndex = 0;
         }
 
-        private static string ValueOf(ComboBox comboBox)
-        {
-            // The index tells two dashboards of the same name apart, but a typed work time has none
-            return comboBox.DropDownStyle == ComboBoxStyle.DropDown
-                ? comboBox.Text.Trim()
-                : comboBox.SelectedIndex + "|" + comboBox.Text;
-        }
-
         private bool IsChanged(ComboBox comboBox)
         {
-            var text = comboBox.Text.Trim();
-            if (text.Length == 0 || text == NO_CHANGE) return false;
-
-            loadedValues.TryGetValue(comboBox, out var loaded);
-            return loaded != ValueOf(comboBox);
+            return picked.Contains(comboBox);
         }
 
-        private void RememberLoadedValues()
+        private void NotePick(ComboBox comboBox)
         {
-            foreach (var tracked in trackedSettings)
+            // A clicked user's values arriving in the form are not picks
+            if (loadingUserSetting) return;
+
+            // Picked is what the user set, whatever the clicked user happens to have: comparing
+            // the two left no way to give the ticked users a value the clicked one already had
+            var text = comboBox.Text.Trim();
+            if (text.Length == 0 || text == NO_CHANGE)
             {
-                loadedValues[tracked.ComboBox] = ValueOf(tracked.ComboBox);
+                picked.Remove(comboBox);
+            }
+            else
+            {
+                picked.Add(comboBox);
+                // A tab belongs to its area, so the area showing goes with it
+                if (comboBox == cbbSiteMapSubArea && cbbSiteMapArea.SelectedIndex > 0) picked.Add(cbbSiteMapArea);
             }
 
+            ShowChangedSettings();
+        }
+
+        private void ForgetPicks()
+        {
+            picked.Clear();
             ShowChangedSettings();
         }
 
@@ -673,7 +695,7 @@ namespace MsCrmTools.UserSettingsUtility
             txtNumberFormat.Text = "";
             txtShortDateFormat.Text = "";
             txtTimeFormat.Text = "";
-            RememberLoadedValues();
+            ForgetPicks();
         }
 
         private Entity BuildChangedSetting()
@@ -787,8 +809,8 @@ namespace MsCrmTools.UserSettingsUtility
 
             #endregion Initialisation des données à mettre à jour
 
-            // Clicking a user fills the form with that user's settings: only what was changed
-            // since then goes to the ticked users, or the clicked user's values would go with it
+            // Clicking a user fills the form with that user's settings: only what was picked
+            // goes to the ticked users, or the clicked user's values would go with it
             foreach (var tracked in trackedSettings.Where(t => !IsChanged(t.ComboBox)))
             {
                 setting.Attributes.Remove(tracked.Attribute);
