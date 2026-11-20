@@ -64,6 +64,7 @@ namespace UserSettings.Harness
                 ClosingDuringUpdate(),
                 PickSurvivesClickingAUser(),
                 PickedHomePageSurvivesAClick(),
+                LookingAtAListIsNotAPick(),
                 ValueTheClickedUserHasIsSent()
             };
         }
@@ -481,6 +482,44 @@ namespace UserSettings.Harness
             SendMessage(combo.Handle, WM_KEYDOWN, (IntPtr)VK_RETURN, IntPtr.Zero);
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Rect
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ComboBoxInfo
+        {
+            public int Size;
+            public Rect Item, Button;
+            public int ButtonState;
+            public IntPtr Combo, Edit, List;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool GetComboBoxInfo(IntPtr hwnd, ref ComboBoxInfo info);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wparam, ref Rect lparam);
+
+        /// <summary>The same choice by mouse: a click on the box to open it, and one on the row it opens at.</summary>
+        private static void ClickWhatIsShown(ComboBox combo)
+        {
+            const int WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, LB_GETITEMRECT = 0x0198;
+            var box = (IntPtr)((5 << 16) | (combo.Width - 8));
+            SendMessage(combo.Handle, WM_LBUTTONDOWN, IntPtr.Zero, box);
+            SendMessage(combo.Handle, WM_LBUTTONUP, IntPtr.Zero, box);
+
+            var info = new ComboBoxInfo { Size = Marshal.SizeOf(typeof(ComboBoxInfo)) };
+            GetComboBoxInfo(combo.Handle, ref info);
+            var row = new Rect();
+            SendMessage(info.List, LB_GETITEMRECT, (IntPtr)combo.SelectedIndex, ref row);
+            var at = (IntPtr)((((row.Top + row.Bottom) / 2) << 16) | ((row.Left + row.Right) / 2));
+            SendMessage(info.List, WM_LBUTTONDOWN, IntPtr.Zero, at);
+            SendMessage(info.List, WM_LBUTTONUP, IntPtr.Zero, at);
+        }
+
         private static Scenario Click(this Scenario scenario, int index)
         {
             // Select waits on the paging limit, which a scenario that has picked one cannot do
@@ -517,9 +556,15 @@ namespace UserSettings.Harness
                 {
                     r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100";
                     r.Find<ComboBox>("cbbWorkStartTime").Text = "08:45";
+                    r.Find<ComboBox>("cbbWorkStartTime").Select(2, 0);
                 })
                 .Click(0)
-                .Do("the picks are still there, among user 1's settings", r => check(r, "after one click"))
+                .Do("the picks are still there, among user 1's settings", r =>
+                {
+                    check(r, "after one click");
+                    var caret = r.Find<ComboBox>("cbbWorkStartTime").SelectionStart;
+                    r.Check(caret == 2, "the caret in the start time moved to " + caret);
+                })
                 .Click(1)
                 .Do("and after clicking user 2", r => check(r, "after two clicks"))
                 .Update(1, 2)
@@ -567,7 +612,17 @@ namespace UserSettings.Harness
                     r.Check(area == "Workplace" && tab == "nav_dashboards", "the home page reads " + area + " / " + tab);
                     r.Check(!r.Find<ToolStripButton>("tsbUpdateUserSettings").Text.Contains("changed"), "the button reads " + r.Find<ToolStripButton>("tsbUpdateUserSettings").Text);
                 })
-                .Do("pick another tab of the area user 2 has", r => r.Find<ComboBox>("cbbSiteMapSubArea").SelectedItem = "nav_activities")
+                .Do("pick another tab of the area user 2 has, and the area goes with it", r =>
+                {
+                    r.Find<ComboBox>("cbbSiteMapSubArea").SelectedItem = "nav_activities";
+                    r.Check(r.Find<ToolStripButton>("tsbUpdateUserSettings").Text.EndsWith("(2 changed)"), "the button reads " + r.Find<ToolStripButton>("tsbUpdateUserSettings").Text);
+                })
+                .Do("pick No change for the tab, and the area nobody picked goes too", r =>
+                {
+                    r.Find<ComboBox>("cbbSiteMapSubArea").SelectedIndex = 0;
+                    r.Check(!r.Find<ToolStripButton>("tsbUpdateUserSettings").Text.Contains("changed"), "the button reads " + r.Find<ToolStripButton>("tsbUpdateUserSettings").Text);
+                })
+                .Do("pick the tab again", r => r.Find<ComboBox>("cbbSiteMapSubArea").SelectedItem = "nav_activities")
                 .Update(0)
                 .Finished()
                 .Do("ask the org what was written", r =>
@@ -576,6 +631,57 @@ namespace UserSettings.Harness
                     var keys = written?.Attributes.Keys.Where(k => k != "usersettingsid").OrderBy(k => k).ToArray() ?? new string[0];
                     r.Check(string.Join(",", keys) == "homepagearea,homepagesubarea", "wrote: " + string.Join(", ", keys));
                     r.Check(written?.GetAttributeValue<string>("homepagesubarea") == "nav_activities", "the tab was not written");
+                });
+        }
+
+        private static Scenario LookingAtAListIsNotAPick()
+        {
+            const int CB_SHOWDROPDOWN = 0x014F, WM_KEYDOWN = 0x0100, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202;
+            const int VK_ESCAPE = 0x1B, VK_F4 = 0x73;
+            Func<Run, ComboBox> paging = r => r.Find<ComboBox>("cbbPagingLimit");
+            Action<Run, string> unmarked = (r, how) =>
+            {
+                var button = r.Find<ToolStripButton>("tsbUpdateUserSettings").Text;
+                Console.WriteLine("    " + how + ": " + button);
+                r.Check(!button.Contains("changed"), how + " marked the paging limit");
+                r.Find<ToolStripButton>("tsbReset").PerformClick();
+            };
+
+            return new Scenario
+                {
+                    Name = "looking-at-a-list-is-not-a-pick",
+                    Why = "fix/keep-picked-settings: opening a list and closing it again sends nothing",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Select(0)
+                .Do("open the list and press Escape", r =>
+                {
+                    SendMessage(paging(r).Handle, CB_SHOWDROPDOWN, (IntPtr)1, IntPtr.Zero);
+                    SendMessage(paging(r).Handle, WM_KEYDOWN, (IntPtr)VK_ESCAPE, IntPtr.Zero);
+                    unmarked(r, "Escape");
+                })
+                .Select(0)
+                .Do("open the list and close it with F4", r =>
+                {
+                    SendMessage(paging(r).Handle, WM_KEYDOWN, (IntPtr)VK_F4, IntPtr.Zero);
+                    SendMessage(paging(r).Handle, WM_KEYDOWN, (IntPtr)VK_F4, IntPtr.Zero);
+                    unmarked(r, "F4 twice");
+                })
+                .Select(0)
+                .Do("click the box open and click it shut", r =>
+                {
+                    var at = (IntPtr)((5 << 16) | (paging(r).Width - 8));
+                    foreach (var message in new[] { WM_LBUTTONDOWN, WM_LBUTTONUP, WM_LBUTTONDOWN, WM_LBUTTONUP })
+                        SendMessage(paging(r).Handle, message, IntPtr.Zero, at);
+                    unmarked(r, "two clicks on the box");
+                })
+                .Select(0)
+                .Do("open the list and have it closed from outside", r =>
+                {
+                    SendMessage(paging(r).Handle, CB_SHOWDROPDOWN, (IntPtr)1, IntPtr.Zero);
+                    SendMessage(paging(r).Handle, CB_SHOWDROPDOWN, IntPtr.Zero, IntPtr.Zero);
+                    unmarked(r, "closed from outside");
                 });
         }
 
@@ -598,6 +704,15 @@ namespace UserSettings.Harness
                 .Do("choose the 50 already on show, from the list", r =>
                 {
                     ChooseWhatIsShown(r.Find<ComboBox>("cbbPagingLimit"));
+                    r.Check(r.Find<ComboBox>("cbbPagingLimit").Text == "50", "the paging limit reads " + r.Find<ComboBox>("cbbPagingLimit").Text);
+                    CheckMarks(r, 1, "label3");
+                    r.Find<ToolStripButton>("tsbReset").PerformClick();
+                })
+                .Select(1)
+                .Do("choose it again, with the mouse this time", r =>
+                {
+                    CheckMarks(r, 0);
+                    ClickWhatIsShown(r.Find<ComboBox>("cbbPagingLimit"));
                     r.Check(r.Find<ComboBox>("cbbPagingLimit").Text == "50", "the paging limit reads " + r.Find<ComboBox>("cbbPagingLimit").Text);
                     CheckMarks(r, 1, "label3");
                 })
