@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Xrm.Sdk;
 
@@ -60,7 +61,10 @@ namespace UserSettings.Harness
                 LoadBlocksUpdate(),
                 FailedUserListSaysSo(),
                 FetchXmlBuilderWaitsForUpdate(),
-                ClosingDuringUpdate()
+                ClosingDuringUpdate(),
+                PickSurvivesClickingAUser(),
+                PickedHomePageSurvivesAClick(),
+                ValueTheClickedUserHasIsSent()
             };
         }
 
@@ -445,15 +449,166 @@ namespace UserSettings.Harness
                     var tip = r.Find<ToolStripButton>("tsbUpdateUserSettings").ToolTipText;
                     r.Check(tip.Contains("Records per page") && tip.Contains("Time zone") && tip.Contains("Start time"), "the tooltip reads " + tip);
                 })
-                .Do("put the paging limit back", r =>
+                .Do("put the paging limit back to the clicked user's, which is still a pick", r =>
                 {
                     r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "50";
+                    CheckMarks(r, 3, "label3", "label4", "label6");
+                })
+                .Do("pick No change for the paging limit", r =>
+                {
+                    r.Find<ComboBox>("cbbPagingLimit").SelectedIndex = 0;
                     CheckMarks(r, 2, "label4", "label6");
                 })
                 .Do("press Reset", r =>
                 {
                     r.Find<ToolStripButton>("tsbReset").PerformClick();
                     CheckMarks(r, 0);
+                });
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wparam, IntPtr lparam);
+
+        /// <summary>
+        /// Opens the list and presses Enter on the row it opens at, as a person choosing the
+        /// value already on show does. Setting SelectedItem to what it already is raises nothing,
+        /// so a scenario doing that would pass without the tool ever hearing of a choice.
+        /// </summary>
+        private static void ChooseWhatIsShown(ComboBox combo)
+        {
+            const int CB_SHOWDROPDOWN = 0x014F, WM_KEYDOWN = 0x0100, VK_RETURN = 0x0D;
+            SendMessage(combo.Handle, CB_SHOWDROPDOWN, (IntPtr)1, IntPtr.Zero);
+            SendMessage(combo.Handle, WM_KEYDOWN, (IntPtr)VK_RETURN, IntPtr.Zero);
+        }
+
+        private static Scenario Click(this Scenario scenario, int index)
+        {
+            // Select waits on the paging limit, which a scenario that has picked one cannot do
+            return scenario
+                .Do("forget what the calendar shows", r => r.Find<ComboBox>("cbbCalendar").SelectedIndex = 0)
+                .Do("click user " + (index + 1), r =>
+                {
+                    var item = r.Users.Items[index];
+                    r.Users.SelectedItems.Clear();
+                    item.Selected = true;
+                    r.Users.FocusedItem = item;
+                })
+                .WaitFor("user " + (index + 1) + "'s settings to show", r => r.Find<ComboBox>("cbbCalendar").Text == "Day");
+        }
+
+        private static Scenario PickSurvivesClickingAUser()
+        {
+            Action<Run, string> check = (r, when) =>
+            {
+                r.Check(r.Find<ComboBox>("cbbPagingLimit").Text == "100", when + " the paging limit reads " + r.Find<ComboBox>("cbbPagingLimit").Text);
+                r.Check(r.Find<ComboBox>("cbbWorkStartTime").Text == "08:45", when + " the start time reads " + r.Find<ComboBox>("cbbWorkStartTime").Text);
+                r.Check(r.Find<ComboBox>("cbbWorkStopTime").Text == "17:00", when + " the stop time reads " + r.Find<ComboBox>("cbbWorkStopTime").Text);
+                CheckMarks(r, 2, "label3", "label6");
+            };
+
+            return new Scenario
+                {
+                    Name = "pick-survives-clicking-a-user",
+                    Why = "fix/keep-picked-settings: a setting picked before a user is clicked is still sent",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Do("pick a paging limit of 100 and type a start time", r =>
+                {
+                    r.Find<ComboBox>("cbbPagingLimit").SelectedItem = "100";
+                    r.Find<ComboBox>("cbbWorkStartTime").Text = "08:45";
+                })
+                .Click(0)
+                .Do("the picks are still there, among user 1's settings", r => check(r, "after one click"))
+                .Click(1)
+                .Do("and after clicking user 2", r => check(r, "after two clicks"))
+                .Update(1, 2)
+                .Finished()
+                .Do("ask the org what was written", r =>
+                {
+                    r.Check(Updates(r).Count == 2, Updates(r).Count + " updates were sent, not 2");
+                    foreach (var written in Updates(r).Select(c => c.Written))
+                    {
+                        var keys = written.Attributes.Keys.Where(k => k != "usersettingsid").OrderBy(k => k).ToArray();
+                        r.Check(string.Join(",", keys) == "paginglimit,workdaystarttime", "wrote: " + string.Join(", ", keys));
+                        r.Check(written.GetAttributeValue<int>("paginglimit") == 100, "wrote a paging limit of " + written.GetAttributeValue<int>("paginglimit"));
+                    }
+                });
+        }
+
+        private static Scenario PickedHomePageSurvivesAClick()
+        {
+            return new Scenario
+                {
+                    Name = "picked-home-page-survives-a-click",
+                    Why = "fix/keep-picked-settings: a picked area keeps its tab when a user with another area is clicked",
+                    Org = () => FakeOrg.Sample("Org A", 3)
+                }
+                .Loaded(3)
+                .Do("pick the SFA area and its contacts tab", r =>
+                {
+                    r.Find<ComboBox>("cbbSiteMapArea").SelectedItem = "SFA";
+                    r.Find<ComboBox>("cbbSiteMapSubArea").SelectedItem = "nav_conts";
+                })
+                .Click(0)
+                .Do("both still read as picked", r =>
+                {
+                    var area = r.Find<ComboBox>("cbbSiteMapArea").Text;
+                    var tab = r.Find<ComboBox>("cbbSiteMapSubArea").Text;
+                    r.Check(area == "SFA" && tab == "nav_conts", "the home page reads " + area + " / " + tab);
+                    r.Check(r.Find<ToolStripButton>("tsbUpdateUserSettings").Text.EndsWith("(2 changed)"), "the button reads " + r.Find<ToolStripButton>("tsbUpdateUserSettings").Text);
+                })
+                .Do("pick No change for the area", r => r.Find<ComboBox>("cbbSiteMapArea").SelectedIndex = 0)
+                .Click(1)
+                .Do("user 2's home page shows, unmarked", r =>
+                {
+                    var area = r.Find<ComboBox>("cbbSiteMapArea").Text;
+                    var tab = r.Find<ComboBox>("cbbSiteMapSubArea").Text;
+                    r.Check(area == "Workplace" && tab == "nav_dashboards", "the home page reads " + area + " / " + tab);
+                    r.Check(!r.Find<ToolStripButton>("tsbUpdateUserSettings").Text.Contains("changed"), "the button reads " + r.Find<ToolStripButton>("tsbUpdateUserSettings").Text);
+                })
+                .Do("pick another tab of the area user 2 has", r => r.Find<ComboBox>("cbbSiteMapSubArea").SelectedItem = "nav_activities")
+                .Update(0)
+                .Finished()
+                .Do("ask the org what was written", r =>
+                {
+                    var written = Updates(r).FirstOrDefault()?.Written;
+                    var keys = written?.Attributes.Keys.Where(k => k != "usersettingsid").OrderBy(k => k).ToArray() ?? new string[0];
+                    r.Check(string.Join(",", keys) == "homepagearea,homepagesubarea", "wrote: " + string.Join(", ", keys));
+                    r.Check(written?.GetAttributeValue<string>("homepagesubarea") == "nav_activities", "the tab was not written");
+                });
+        }
+
+        private static Scenario ValueTheClickedUserHasIsSent()
+        {
+            return new Scenario
+                {
+                    Name = "value-the-clicked-user-has-is-sent",
+                    Why = "fix/keep-picked-settings: user 2 has 50 a page and user 1 has 100; choosing 50 with user 2 clicked gives it to user 1",
+                    Org = () =>
+                    {
+                        var org = FakeOrg.Sample("Org A", 3);
+                        org.Settings[UserId(0)]["paginglimit"] = 100;
+                        return org;
+                    }
+                }
+                .Loaded(3)
+                .Select(1)
+                .Do("nothing is marked after clicking user 2", r => CheckMarks(r, 0))
+                .Do("choose the 50 already on show, from the list", r =>
+                {
+                    ChooseWhatIsShown(r.Find<ComboBox>("cbbPagingLimit"));
+                    r.Check(r.Find<ComboBox>("cbbPagingLimit").Text == "50", "the paging limit reads " + r.Find<ComboBox>("cbbPagingLimit").Text);
+                    CheckMarks(r, 1, "label3");
+                })
+                .Tick(0, 1)
+                .CountsRead("[1],[0],[]")
+                .Update(0, 1)
+                .Finished()
+                .Do("ask the org what user 1 has now", r =>
+                {
+                    var limit = r.Fake.Settings[UserId(0)].GetAttributeValue<int>("paginglimit");
+                    r.Check(limit == 50, "user 1's paging limit is " + limit);
                 });
         }
 
