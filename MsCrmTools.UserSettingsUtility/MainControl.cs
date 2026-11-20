@@ -22,8 +22,10 @@ namespace MsCrmTools.UserSettingsUtility
         private const string UPDATE_BUTTON_TEXT = "Update User(s) Settings";
         private readonly Font changedFont;
         private readonly HashSet<ComboBox> picked = new HashSet<ComboBox>();
+        private bool areaPickedForTab;
         private List<string> areas;
         private volatile bool cancelUpdate;
+        private bool listShutUnchosen;
         private bool loadingUserSetting;
         private LogManager log;
         private string sitemapxml = "";
@@ -75,8 +77,15 @@ namespace MsCrmTools.UserSettingsUtility
                 var comboBox = tracked.ComboBox;
                 comboBox.SelectedIndexChanged += (sender, e) => NotePick(comboBox);
                 comboBox.TextChanged += (sender, e) => NotePick(comboBox);
-                // Choosing the value already on show changes nothing, and is still a choice
-                comboBox.SelectionChangeCommitted += (sender, e) => NotePick(comboBox);
+                // Choosing the value already on show changes nothing, and is still a choice. A list
+                // shut again with F4 or a click on its box reports the same, and was only looked at
+                comboBox.DropDown += (sender, e) => listShutUnchosen = false;
+                comboBox.KeyDown += (sender, e) => listShutUnchosen = e.KeyCode != Keys.Enter;
+                comboBox.MouseDown += (sender, e) => listShutUnchosen = true;
+                comboBox.SelectionChangeCommitted += (sender, e) =>
+                {
+                    if (!listShutUnchosen) NotePick(comboBox);
+                };
             }
         }
 
@@ -93,7 +102,15 @@ namespace MsCrmTools.UserSettingsUtility
             // What has been picked is on its way to the ticked users. The clicked user's values
             // fill in around it; over it, they would cancel the pick
             var kept = trackedSettings.Where(t => picked.Contains(t.ComboBox))
-                .Select(t => new { t.ComboBox, Item = t.ComboBox.SelectedItem, t.ComboBox.Text })
+                .Select(t => new
+                {
+                    t.ComboBox,
+                    Item = t.ComboBox.SelectedItem,
+                    t.ComboBox.Text,
+                    Typed = t.ComboBox.DropDownStyle == ComboBoxStyle.DropDown,
+                    // A work time may be half typed when a clicked user's settings arrive
+                    Caret = t.ComboBox.DropDownStyle == ComboBoxStyle.DropDown ? t.ComboBox.SelectionStart : 0
+                })
                 .ToList();
 
             loadingUserSetting = true;
@@ -106,8 +123,15 @@ namespace MsCrmTools.UserSettingsUtility
                 // In the order above, area before tab: putting the area back refills the tabs
                 foreach (var keep in kept)
                 {
-                    if (keep.ComboBox.DropDownStyle == ComboBoxStyle.DropDown) keep.ComboBox.Text = keep.Text;
-                    else keep.ComboBox.SelectedItem = keep.Item;
+                    if (keep.Typed)
+                    {
+                        keep.ComboBox.Text = keep.Text;
+                        keep.ComboBox.Select(keep.Caret, 0);
+                    }
+                    else
+                    {
+                        keep.ComboBox.SelectedItem = keep.Item;
+                    }
                 }
 
                 loadingUserSetting = false;
@@ -570,13 +594,21 @@ namespace MsCrmTools.UserSettingsUtility
             if (text.Length == 0 || text == NO_CHANGE)
             {
                 picked.Remove(comboBox);
+                // The area was only going because its tab was
+                if (comboBox == cbbSiteMapSubArea && areaPickedForTab) picked.Remove(cbbSiteMapArea);
             }
             else
             {
-                picked.Add(comboBox);
                 // A tab belongs to its area, so the area showing goes with it
-                if (comboBox == cbbSiteMapSubArea && cbbSiteMapArea.SelectedIndex > 0) picked.Add(cbbSiteMapArea);
+                if (comboBox == cbbSiteMapSubArea && cbbSiteMapArea.SelectedIndex > 0 && picked.Add(cbbSiteMapArea))
+                {
+                    areaPickedForTab = true;
+                }
+
+                picked.Add(comboBox);
             }
+
+            if (comboBox == cbbSiteMapArea || !picked.Contains(cbbSiteMapArea)) areaPickedForTab = false;
 
             ShowChangedSettings();
         }
@@ -584,6 +616,7 @@ namespace MsCrmTools.UserSettingsUtility
         private void ForgetPicks()
         {
             picked.Clear();
+            areaPickedForTab = false;
             ShowChangedSettings();
         }
 
